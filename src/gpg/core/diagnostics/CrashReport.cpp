@@ -167,6 +167,7 @@ namespace gpg::diag
       // no symbol machinery): the RSDS record carries the signature GUID and
       // age. With this pair, any module+RVA line in this report and the .dmp
       // resolve against exactly one archived PDB.
+#if !defined(FAF_POSIX) // POSIX: a Mach-O image has no PE debug directory
       {
         const HMODULE exeModule = ::GetModuleHandleW(nullptr);
         if (exeModule != nullptr) {
@@ -208,6 +209,7 @@ namespace gpg::diag
           }
         }
       }
+#endif
     }
 
     void WriteProcessSection(std::FILE* const sink)
@@ -853,6 +855,7 @@ namespace gpg::diag
     (void)::HeapFree(::GetProcessHeap(), 0, utf8);
   }
 
+#if !defined(FAF_POSIX) // POSIX: no Win32 dialog (ShowCrashReportDialog below)
   namespace
   {
 
@@ -1037,9 +1040,15 @@ namespace gpg::diag
     }
 
   } // namespace
+#endif
 
   void ShowCrashReportDialog(const char* const reportPath)
   {
+#if defined(FAF_POSIX)
+    // POSIX: the report and its path go to stderr instead of a Win32 dialog.
+    const char* const reportFile = (reportPath != nullptr) ? reportPath : CrashReportPath();
+    std::fprintf(stderr, "FAF crashed. Crash report: %s\n", reportFile);
+#else
     // Unattended runs (test scripts): FAF_CRASH_NO_DIALOG=1 keeps the report
     // and minidump but lets the process end instead of waiting on the dialog.
     if (const char* const noDialog = std::getenv("FAF_CRASH_NO_DIALOG"); noDialog != nullptr && noDialog[0] == '1') {
@@ -1100,6 +1109,7 @@ namespace gpg::diag
 
     sCrashDialogText = nullptr;
     (void)::HeapFree(::GetProcessHeap(), 0, wide);
+#endif
   }
 
   void NoteSimLuaError(const char* const message)

@@ -1604,7 +1604,13 @@ namespace
   {
     moho::StatItem* const item = EnsureEngineFloatStat(slot, statPath);
     volatile long* const counter = reinterpret_cast<volatile long*>(&item->mPrimaryValueBits);
+#if defined(FAF_POSIX)
+    // `long` is 64-bit here: the stat word holds the float's 32 bits, as on Windows (the
+    // `long` Interlocked overloads operate on 32 bits, compat/Sync.h).
+    const long nextBits = std::bit_cast<std::int32_t>(value);
+#else
     const long nextBits = std::bit_cast<long>(value);
+#endif
     long observed = 0;
     do {
       observed = ::InterlockedCompareExchange(counter, 0, 0);

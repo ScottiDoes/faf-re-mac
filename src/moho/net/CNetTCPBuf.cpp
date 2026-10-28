@@ -283,6 +283,13 @@ size_t CNetTCPBuf::Read(char* buf, size_t len, const bool isBlocking)
       if (buf != nullptr) {
         while (len >= kChunkSize) {
           if (!isBlocking) {
+#if defined(FAF_POSIX)
+            // Zero-timeout readability test. A BSD fd_set is a bitset capped at FD_SETSIZE
+            // descriptors, not Winsock's count + array; poll() has no cap and counts a
+            // readable, closed or failed socket as select() does.
+            pollfd readPoll{mSocket, POLLIN, 0};
+            const int selectRes = ::poll(&readPoll, 1, 0);
+#else
             fd_set readFds{};
             readFds.fd_count = 1;
             readFds.fd_array[0] = mSocket;
@@ -290,6 +297,7 @@ size_t CNetTCPBuf::Read(char* buf, size_t len, const bool isBlocking)
             timeout.tv_sec = 0;
             timeout.tv_usec = 0;
             const int selectRes = select(1, &readFds, nullptr, nullptr, &timeout);
+#endif
             if (selectRes != SOCKET_ERROR && selectRes <= 0) {
               return copiedFromBuffer;
             }
@@ -360,6 +368,11 @@ size_t CNetTCPBuf::Read(char* buf, size_t len, const bool isBlocking)
  */
 bool CNetTCPBuf::Select() const
 {
+#if defined(FAF_POSIX)
+  // Zero-timeout readability test with poll(), as in Read.
+  pollfd readPoll{mSocket, POLLIN, 0};
+  const int selected = ::poll(&readPoll, 1, 0);
+#else
   fd_set readFds{};
   readFds.fd_count = 1;
   readFds.fd_array[0] = mSocket;
@@ -369,6 +382,7 @@ bool CNetTCPBuf::Select() const
   timeout.tv_usec = 0;
 
   const int selected = select(1, &readFds, nullptr, nullptr, &timeout);
+#endif
   return selected == SOCKET_ERROR || selected > 0;
 }
 

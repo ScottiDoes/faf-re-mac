@@ -7,7 +7,7 @@
 #include "Wm3Vector2.h"
 #include "Wm3Vector3.h"
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
 #include <d3d9types.h>
 #else
 struct RECT

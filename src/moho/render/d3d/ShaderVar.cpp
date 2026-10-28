@@ -6,7 +6,11 @@
 #include "gpg/gal/Error.hpp"
 #include "gpg/gal/Effect.hpp"
 #include "gpg/gal/EffectVariable.hpp"
+#if !defined(FAF_POSIX)
 #include "gpg/gal/backends/d3d9/TextureD3D9.hpp"
+#else
+#include "gpg/gal/Texture.hpp"
+#endif
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/ID3DRenderTarget.h"
 #include "moho/render/ID3DTextureSheet.h"

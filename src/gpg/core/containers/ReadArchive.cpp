@@ -320,7 +320,14 @@ namespace
      */
     void ReadULong(unsigned long* const value) override
     {
+#if defined(FAF_POSIX)
+      // LP64 (README rule 2): the archive's long lane is 4 bytes; widen it into the 64-bit long.
+      std::uint32_t lane = 0;
+      ReadULong2(&lane);
+      *value = lane;
+#else
       ReadULong2(value);
+#endif
     }
 
     /**
@@ -331,7 +338,14 @@ namespace
      */
     void ReadLong(long* const value) override
     {
+#if defined(FAF_POSIX)
+      // LP64 (README rule 2): the archive's long lane is 4 bytes; sign-extend it.
+      std::int32_t lane = 0;
+      ReadLong2(&lane);
+      *value = lane;
+#else
       ReadLong2(value);
+#endif
     }
 
     /**
@@ -699,7 +713,14 @@ namespace
      */
     void ReadULong(unsigned long* const value) override
     {
+#if defined(FAF_POSIX)
+      // LP64-08: a Windows unsigned long is 32 bits; parse with its range, then widen.
+      std::uint32_t lane = 0;
+      (*mCachedStream) >> lane;
+      *value = lane;
+#else
       (*mCachedStream) >> *value;
+#endif
     }
 
     /**
@@ -710,7 +731,14 @@ namespace
      */
     void ReadLong(long* const value) override
     {
+#if defined(FAF_POSIX)
+      // LP64-08: a Windows long is 32 bits; parse with its range, then sign-extend.
+      std::int32_t lane = 0;
+      (*mCachedStream) >> lane;
+      *value = lane;
+#else
       (*mCachedStream) >> *value;
+#endif
     }
 
     /**

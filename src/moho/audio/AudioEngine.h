@@ -6,7 +6,12 @@
 #include <Windows.h>
 #include <mmreg.h>
 #include <mmsystem.h>
+#if defined(FAF_POSIX)
+// XACT is Windows-only: the stand-in declares the SDK value types the layouts below use.
+#include "platform/posix/stubs/audio-movie/include/xact3.h"
+#else
 #include <xact3.h>
+#endif
 
 #include "gpg/core/containers/String.h"
 #include "gpg/core/streams/MemBufferStream.h"

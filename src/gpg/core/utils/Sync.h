@@ -22,7 +22,7 @@ namespace gpg::core
         constexpr uint8_t kKindMask = 0x01;
     }
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(FAF_POSIX)
     // Some platforms (older macOS) miss pthread_mutex_timedlock; emulate if needed.
 #if defined(__APPLE__) || defined(__MACH__)
 #define GPG_NO_PTHREAD_MUTEX_TIMEDLOCK 1
@@ -86,7 +86,7 @@ namespace gpg::core
             lockMode_ = b;
         }
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX) // POSIX: Win32 objects from platform/posix
         /**
          * Initialize owned CRITICAL_SECTION.
          */
@@ -151,7 +151,7 @@ namespace gpg::core
          * Release resources if owned().
          */
         void destroy() noexcept {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX) // POSIX: Win32 objects from platform/posix
             if (!native_ || !owned()) { native_ = nullptr; set_owned(false); return; }
             if (kind() == LockKind::kCriticalSection) {
                 auto* cs = static_cast<CRITICAL_SECTION*>(native_);
@@ -181,7 +181,7 @@ namespace gpg::core
          * Blocking lock.
          */
         void lock() const noexcept {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX) // POSIX: Win32 objects from platform/posix
             if (!native_) return;
             if (kind() == LockKind::kCriticalSection) {
                 EnterCriticalSection(static_cast<CRITICAL_SECTION*>(native_));
@@ -198,7 +198,7 @@ namespace gpg::core
          * Non-blocking try_lock.
          */
         [[nodiscard]] bool try_lock() const noexcept {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX) // POSIX: Win32 objects from platform/posix
             if (!native_) return false;
             if (kind() == LockKind::kCriticalSection) {
                 return !!TryEnterCriticalSection(static_cast<CRITICAL_SECTION*>(native_));
@@ -216,7 +216,7 @@ namespace gpg::core
          */
         template<class Rep, class Period>
         [[nodiscard]] bool try_lock_for(const std::chrono::duration<Rep, Period>& d) noexcept {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX) // POSIX: Win32 objects from platform/posix
             if (!native_) return false;
 
             if (kind() == LockKind::kCriticalSection) {
@@ -265,7 +265,7 @@ namespace gpg::core
          * Unlock.
          */
         void unlock() const noexcept {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX) // POSIX: Win32 objects from platform/posix
             if (!native_) return;
             if (kind() == LockKind::kCriticalSection) {
                 LeaveCriticalSection(static_cast<CRITICAL_SECTION*>(native_));
@@ -301,7 +301,7 @@ namespace gpg::core
      * Lightweight fast mutex (no std::mutex).
      */
     struct FastMutex {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX) // POSIX: Win32 objects from platform/posix
         CRITICAL_SECTION cs{};
         FastMutex() { InitializeCriticalSection(&cs); }
         ~FastMutex() { DeleteCriticalSection(&cs); }
@@ -326,7 +326,7 @@ namespace gpg::core
      * Portable read-write lock without std::shared_mutex.
      */
     struct SharedLock {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX) // POSIX: Win32 objects from platform/posix
         SRWLOCK lock_{ SRWLOCK_INIT };
 
         void lock_shared()   noexcept { AcquireSRWLockShared(&lock_); }

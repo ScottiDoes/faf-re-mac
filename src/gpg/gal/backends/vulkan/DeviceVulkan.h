@@ -206,6 +206,10 @@ namespace gpg::gal
       bool hasImage = false;
       bool acquireWaitPending = false; // the next submission waits for the acquire
       void* window = nullptr;
+#if defined(FAF_POSIX)
+      bool outOfDate = false; // a present said VK_ERROR_OUT_OF_DATE_KHR: rebuilt before the next acquire
+      bool suboptimalNoted = false; // logged once per swap chain
+#endif
     };
 
     struct Frame
@@ -291,6 +295,15 @@ namespace gpg::gal
     void CollectProfileFrames();
 
     void CopyImage(vulkan::TrackedImage& source, vulkan::TrackedImage& destination, const RECT* sourceRect, const RECT* destinationRect, bool scale);
+#if defined(FAF_POSIX)
+    // ---- Apple drivers (MoltenVK, KosmicKrisp) -----------------------------------
+    /** The size head `head` asks for: its own, else its window's client area; 0x0 when neither is known. */
+    [[nodiscard]] VkExtent2D RequestedExtent(const Head& head) const;
+    /** A swap chain that went out of date, rebuilt at the size the engine knows; false when that failed. */
+    bool RebuildSwapChain(std::size_t headIndex);
+    /** Gives head `headIndex`'s back buffer a stand-in image that frames without an acquired image draw into. */
+    void EnsureStandIn(std::size_t headIndex);
+#endif
 
     // ---- core objects --------------------------------------------------------
     int mCurThreadId = 0;
@@ -312,6 +325,11 @@ namespace gpg::gal
     bool mMemoryBudget = false; // VK_EXT_memory_budget enabled
     std::string mDriverName;    // VkPhysicalDeviceDriverProperties driverName + driverInfo
     VkFormat mDepthStencilFormat = VK_FORMAT_D24_UNORM_S8_UINT;
+#if defined(FAF_POSIX)
+    bool mPortabilitySubset = false;          // VK_KHR_portability_subset enabled (MoltenVK)
+    bool mSamplerLodBias = true;              // false: the portability subset forbids a sampler mipLodBias
+    bool mTextureSetUpdateAfterBind = false;  // set 0 is an update-after-bind layout (MoltenVK's per-stage sampler limit)
+#endif
 
     vulkan::MemoryAllocator mMemory;
     vulkan::UploadAllocator mUpload;

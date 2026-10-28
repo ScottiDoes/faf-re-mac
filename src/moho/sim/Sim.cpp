@@ -6017,7 +6017,13 @@ void Sim::UpdateChecksum()
       const std::uint64_t maxStorage[] = {economy.mMaxStorage.ENERGY, economy.mMaxStorage.MASS};
       for (int resource = 0; resource < 2; ++resource) {
         Logf(
+#if defined(FAF_POSIX)
+          // The MSVC CRT consumes "I64" as a size prefix and prints '\n' as plain text;
+          // Apple's printf would print "I64". Emit the Windows text.
+          "    mMaxStorage[%d]=\n",
+#else
           "    mMaxStorage[%d]=%I64\n",
+#endif
           resource,
           static_cast<std::uint32_t>(maxStorage[resource] & 0xFFFFFFFFu),
           static_cast<std::uint32_t>(maxStorage[resource] >> 32)

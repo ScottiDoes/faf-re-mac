@@ -30,8 +30,15 @@ namespace
     struct SharedCountControl
     {
         void** vtable;
+#if defined(FAF_POSIX)
+        // LP64-10: Windows `long` is 32 bits; the counts sit at +0x08/+0x0C over boost's
+        // 32-bit sp_counted_base counts, with px at +0x10.
+        volatile LONG useCount;
+        volatile LONG weakCount;
+#else
         volatile long useCount;
         volatile long weakCount;
+#endif
     };
 
     void RetainSharedCount(void* sharedCount)
@@ -52,6 +59,18 @@ namespace
 
         auto* const control = reinterpret_cast<SharedCountControl*>(sharedCount);
         if (_InterlockedExchangeAdd(&control->useCount, -1) == 1) {
+#if defined(FAF_POSIX)
+            // Itanium C++ ABI: the virtual destructor takes two vtable slots, so dispose() and
+            // destroy() are not at MSVC's [1]/[2] ([1] is the deleting destructor). The block is
+            // a real boost::detail::sp_counted_base (its vtable comes from a probe class derived
+            // from it, BoostWrappers.cpp), so dispatch through that class instead.
+            auto* const base = reinterpret_cast<boost::detail::sp_counted_base*>(sharedCount);
+            base->dispose();
+
+            if (_InterlockedExchangeAdd(&control->weakCount, -1) == 1) {
+                base->destroy();
+            }
+#else
             using ControlFn = void(__thiscall*)(SharedCountControl*);
             auto* const disposeFn = reinterpret_cast<ControlFn>(control->vtable[1]);
             disposeFn(control);
@@ -60,6 +79,7 @@ namespace
                 auto* const destroyFn = reinterpret_cast<ControlFn>(control->vtable[2]);
                 destroyFn(control);
             }
+#endif
             return true;
         }
 

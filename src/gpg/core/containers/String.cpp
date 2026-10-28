@@ -136,6 +136,42 @@ char* gpg::STR_EncodeUtf8Char(
   const char* limit
 )
 {
+#if defined(FAF_POSIX)
+  // LP64-07: wchar_t is a signed 32-bit UTF-32 unit here. A code point past the BMP (from a
+  // 4-byte sequence, which Windows' 16-bit wchar_t cannot hold) is written as 4-byte UTF-8,
+  // so it round-trips. Anything else is encoded as the 16-bit unit Windows would hold, so a
+  // negative value (a sign-extended 16-bit unit) gives Windows' bytes for 0xFF80..0xFFFF.
+  const std::uint32_t unit = static_cast<std::uint32_t>(chr);
+  if (unit > 0xFFFFu && unit <= 0x1FFFFFu) {
+    if (!limit || dest + 4 <= limit) {
+      dest[0] = static_cast<char>((unit >> 18) | 0xF0u);
+      dest[1] = static_cast<char>(((unit >> 12) & 0x3Fu) | 0x80u);
+      dest[2] = static_cast<char>(((unit >> 6) & 0x3Fu) | 0x80u);
+      dest[3] = static_cast<char>((unit & 0x3Fu) | 0x80u);
+      return dest + 4;
+    }
+    return dest;
+  }
+  const std::uint32_t code = unit & 0xFFFFu;
+  if (code >= 0x80u) {
+    if (code >= 0x800u) {
+      if (!limit || dest + 3 <= limit) {
+        dest[0] = static_cast<char>((code >> 12) | 0xE0u);
+        dest[1] = static_cast<char>(((code >> 6) & 0x3Fu) | 0x80u);
+        dest[2] = static_cast<char>((code & 0x3Fu) | 0x80u);
+        return dest + 3;
+      }
+    } else if (!limit || dest + 2 <= limit) {
+      dest[0] = static_cast<char>((code >> 6) | 0xC0u);
+      dest[1] = static_cast<char>((code & 0x3Fu) | 0x80u);
+      return dest + 2;
+    }
+  } else if (!limit || dest + 1 <= limit) {
+    dest[0] = static_cast<char>(code);
+    return dest + 1;
+  }
+  return dest;
+#else
   if (chr >= 0x80) {
     if (chr >= 0x800) {
       if (!limit || dest + 3 <= limit) {
@@ -154,6 +190,7 @@ char* gpg::STR_EncodeUtf8Char(
     return dest + 1;
   }
   return dest;
+#endif
 }
 
 /**
@@ -168,6 +205,66 @@ const char* gpg::STR_DecodeUtf8Char(
   wchar_t& dest
 )
 {
+#if defined(FAF_POSIX)
+  // LP64-07: wchar_t is a signed 32-bit UTF-32 unit here. Every result is the 16-bit value
+  // Windows' wchar_t holds - an invalid lead byte is its sign extension (0xFF80..0xFFFF), a
+  // truncated 4-byte sequence keeps only the low 16 bits - except a complete 4-byte
+  // sequence, which is one wchar_t carrying the whole code point (lead bits included).
+  // Its low 16 bits are Windows' value, so consumers that mask to 16 bits see no change.
+  const char* cursor = str + 1;
+  const unsigned char lead = static_cast<unsigned char>(*str);
+  if ((lead & 0x80u) == 0u) {
+    dest = static_cast<wchar_t>(lead);
+    return cursor;
+  }
+
+  std::uint32_t codepoint = 0;
+  bool fourByte = false;
+  if ((lead & 0xE0u) == 0xC0u) {
+    codepoint = (lead & 0x1Fu) << 6;
+  } else {
+    if ((lead & 0xF0u) == 0xE0u) {
+      codepoint = (lead & 0x0Fu) << 12;
+    } else {
+      if ((lead & 0xF8u) != 0xF0u) {
+        dest = static_cast<wchar_t>(0xFF00u | lead);
+        return cursor;
+      }
+
+      const unsigned char c2 = static_cast<unsigned char>(*cursor);
+      if ((c2 & 0xC0u) != 0x80u) {
+        dest = 0;
+        return cursor;
+      }
+
+      codepoint = (c2 & 0x3Fu) << 12;
+      fourByte = true;
+      cursor = str + 2;
+    }
+
+    const unsigned char c3 = static_cast<unsigned char>(*cursor);
+    if ((c3 & 0xC0u) != 0x80u) {
+      dest = static_cast<wchar_t>(codepoint & 0xFFFFu);
+      return cursor;
+    }
+
+    codepoint |= (c3 & 0x3Fu) << 6;
+    ++cursor;
+  }
+
+  const unsigned char c4 = static_cast<unsigned char>(*cursor);
+  if ((c4 & 0xC0u) == 0x80u) {
+    codepoint |= c4 & 0x3Fu;
+    ++cursor;
+    if (fourByte) {
+      dest = static_cast<wchar_t>(((lead & 0x07u) << 18) | codepoint);
+      return cursor;
+    }
+  }
+
+  dest = static_cast<wchar_t>(codepoint & 0xFFFFu);
+  return cursor;
+#else
   const char* cursor = str + 1;
   const signed char leadSigned = static_cast<signed char>(*str);
   const unsigned char lead = static_cast<unsigned char>(*str);
@@ -215,6 +312,7 @@ const char* gpg::STR_DecodeUtf8Char(
 
   dest = codepoint;
   return cursor;
+#endif
 }
 
 /**

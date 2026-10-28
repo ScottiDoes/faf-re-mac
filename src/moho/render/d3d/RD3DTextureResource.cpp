@@ -3,8 +3,13 @@
 #include "gpg/core/streams/MemBufferStream.h"
 #include "gpg/core/utils/Global.h"
 #include "gpg/core/utils/Logging.h"
+#if !defined(FAF_POSIX)
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
 #include "gpg/gal/backends/d3d9/TextureD3D9.hpp"
+#else
+#include "gpg/gal/Device.hpp"
+#include "gpg/gal/Texture.hpp"
+#endif
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/d3d/CD3DDevice.h"

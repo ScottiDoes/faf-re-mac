@@ -14,12 +14,17 @@
 #include <boost/thread/tss.hpp>
 
 #include "moho/terrain/TerrainFactory.h"
+#if !defined(FAF_POSIX)
+// POSIX: the D3D9/D3D10 backends are not built (macos/exclusions.cmake), so no object of
+// these types exists there and the shared_ptr lanes below that dispose them are never run;
+// their forward declarations (BoostWrappers.h) are enough to compile them.
 #include "gpg/gal/backends/d3d9/EffectTechniqueD3D9.hpp"
 #include "gpg/gal/backends/d3d9/EffectVariableD3D9.hpp"
 #include "gpg/gal/backends/d3d10/EffectD3D10.hpp"
 #include "gpg/gal/backends/d3d10/EffectTechniqueD3D10.hpp"
 #include "gpg/gal/backends/d3d10/EffectVariableD3D10.hpp"
 #include "gpg/gal/backends/d3d10/PipelineStateD3D10.hpp"
+#endif
 #include "moho/animation/CAniPose.h"
 #include "moho/misc/CSaveGameRequestImpl.h"
 #include "moho/misc/LaunchInfoBase.h"
@@ -1856,6 +1861,23 @@ namespace boost
     countedImpl->px = nullptr;
   }
 
+#if defined(FAF_POSIX)
+  namespace
+  {
+    /**
+     * POSIX: the D3D9/D3D10 backends are not built, so their effect types are incomplete in
+     * this file and no object of them can exist. A live pointee reaching one of their
+     * dispose/unwind lanes is a porting bug: report it and stop, instead of `delete` on an
+     * incomplete type, which would skip the destructor (-Wdelete-incomplete).
+     */
+    [[noreturn]] void AbortOnUnbuiltBackendPointee() noexcept
+    {
+      FAF_POSIX_STUB("shared_ptr lane of an unbuilt D3D9/D3D10 type reached with a live object");
+      std::abort();
+    }
+  } // namespace
+#endif
+
   /**
    * Address: 0x009418D0 (FUN_009418D0, boost::detail::sp_counted_impl_p<gpg::gal::EffectTechniqueD3D9>::dispose)
    *
@@ -1867,7 +1889,13 @@ namespace boost
     SpCountedImplStorage<gpg::gal::EffectTechniqueD3D9>* const countedImpl
   ) noexcept
   {
+#if defined(FAF_POSIX)
+    if (countedImpl != nullptr && countedImpl->px != nullptr) {
+      AbortOnUnbuiltBackendPointee();
+    }
+#else
     DisposeSpCountedImplPointee(countedImpl);
+#endif
   }
 
   /**
@@ -1881,7 +1909,13 @@ namespace boost
     SpCountedImplStorage<gpg::gal::EffectVariableD3D9>* const countedImpl
   ) noexcept
   {
+#if defined(FAF_POSIX)
+    if (countedImpl != nullptr && countedImpl->px != nullptr) {
+      AbortOnUnbuiltBackendPointee();
+    }
+#else
     DisposeSpCountedImplPointee(countedImpl);
+#endif
   }
 
   /**
@@ -1895,7 +1929,13 @@ namespace boost
     SpCountedImplStorage<gpg::gal::EffectTechniqueD3D10>* const countedImpl
   ) noexcept
   {
+#if defined(FAF_POSIX)
+    if (countedImpl != nullptr && countedImpl->px != nullptr) {
+      AbortOnUnbuiltBackendPointee();
+    }
+#else
     DisposeSpCountedImplPointee(countedImpl);
+#endif
   }
 
   /**
@@ -1909,7 +1949,13 @@ namespace boost
     SpCountedImplStorage<gpg::gal::EffectVariableD3D10>* const countedImpl
   ) noexcept
   {
+#if defined(FAF_POSIX)
+    if (countedImpl != nullptr && countedImpl->px != nullptr) {
+      AbortOnUnbuiltBackendPointee();
+    }
+#else
     DisposeSpCountedImplPointee(countedImpl);
+#endif
   }
 
   /**
@@ -2163,7 +2209,14 @@ namespace boost
     gpg::gal::EffectTechniqueD3D9* const effectTechnique
   ) noexcept
   {
+#if defined(FAF_POSIX)
+    if (effectTechnique != nullptr) {
+      AbortOnUnbuiltBackendPointee();
+    }
+    return 0;
+#else
     return DeletePolymorphicSharedCountCtorPointeeOnUnwind(effectTechnique);
+#endif
   }
 
   /**
@@ -2177,7 +2230,14 @@ namespace boost
     gpg::gal::EffectVariableD3D9* const effectVariable
   ) noexcept
   {
+#if defined(FAF_POSIX)
+    if (effectVariable != nullptr) {
+      AbortOnUnbuiltBackendPointee();
+    }
+    return 0;
+#else
     return DeletePolymorphicSharedCountCtorPointeeOnUnwind(effectVariable);
+#endif
   }
 
   /**

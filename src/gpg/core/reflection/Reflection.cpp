@@ -180,9 +180,18 @@
 #include "gpg/core/reflection/StaticInitPhase.h"
 #include "gpg/core/reflection/Reflection.h"
 
+#if defined(FAF_POSIX)
+// POSIX: the Itanium C++ ABI equivalent (platform/posix/compat/Misc.h): the
+// most-derived object's std::type_info from vtable[-1], std::bad_typeid for null.
+static inline void* __RTtypeid(void* const object)
+{
+  return faf_posixRTtypeid(object);
+}
+#else
 // The MSVC runtime's polymorphic typeid entry point (vcruntime). cl declares
 // it implicitly; clang-cl needs the declaration.
 extern "C" void* __cdecl __RTtypeid(void* object);
+#endif
 using namespace gpg;
 
 

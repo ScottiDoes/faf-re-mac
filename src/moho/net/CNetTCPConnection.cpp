@@ -265,6 +265,28 @@ void CNetTCPConnection::Pull()
 
   switch (mState) {
   case kNetStateConnecting: {
+#if defined(FAF_POSIX)
+    // A BSD fd_set is a bitset (not Winsock's count + array) and select() needs the highest
+    // descriptor + 1. A finished non-blocking connect is writable on POSIX whether it
+    // succeeded or failed (SO_ERROR tells which); a failure moves to exceptFds, where
+    // Winsock reports it.
+    fd_set writeFds;
+    FD_ZERO(&writeFds);
+    FD_SET(mSocket, &writeFds);
+
+    fd_set exceptFds = writeFds;
+    timeval timeout{};
+
+    const int selected = ::select(mSocket + 1, nullptr, &writeFds, &exceptFds, &timeout);
+    if (selected > 0 && FD_ISSET(mSocket, &writeFds)) {
+      int connectError = 0;
+      socklen_t connectErrorLen = sizeof(connectError);
+      if (::getsockopt(mSocket, SOL_SOCKET, SO_ERROR, &connectError, &connectErrorLen) != 0 || connectError != 0) {
+        FD_CLR(mSocket, &writeFds);
+        FD_SET(mSocket, &exceptFds);
+      }
+    }
+#else
     fd_set writeFds{};
     writeFds.fd_count = 1;
     writeFds.fd_array[0] = mSocket;
@@ -275,6 +297,7 @@ void CNetTCPConnection::Pull()
     timeout.tv_usec = 0;
 
     const int selected = ::select(0, nullptr, &writeFds, &exceptFds, &timeout);
+#endif
     if (selected == 0) {
       return;
     }

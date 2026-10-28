@@ -2,7 +2,9 @@
 #include "gpg/core/profiling/Profiler.h"
 
 #include <Windows.h>
+#if !defined(FAF_POSIX)
 #include <d3d9.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -26,7 +28,9 @@
 #include "gpg/gal/Head.hpp"
 #include "gpg/gal/OutputContext.hpp"
 #include "gpg/gal/RenderTargetContext.hpp"
+#if !defined(FAF_POSIX)
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
+#endif
 #include "gpg/gal/Effect.hpp"
 #include "gpg/gal/EffectTechnique.hpp"
 #include "moho/misc/FileWaitHandleSet.h"

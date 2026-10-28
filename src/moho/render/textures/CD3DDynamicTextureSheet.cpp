@@ -5,8 +5,13 @@
 #include "gpg/core/utils/Global.h"
 #include "gpg/gal/D3D9Utils.h"
 #include "gpg/gal/Error.hpp"
+#if !defined(FAF_POSIX)
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
 #include "gpg/gal/backends/d3d9/TextureD3D9.hpp"
+#else
+#include "gpg/gal/Device.hpp"
+#include "gpg/gal/Texture.hpp"
+#endif
 #include "moho/render/d3d/CD3DDevice.h"
 
 namespace moho

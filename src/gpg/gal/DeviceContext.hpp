@@ -29,6 +29,11 @@ namespace gpg::gal
         // (`DeviceVulkan`, /vulkan) backends.
         Direct3D12 = 4,
         Vulkan = 5,
+#if defined(FAF_POSIX)
+        // POSIX build: the null device of the headless replay runner
+        // (`DeviceNull`, platform/posix/stubs/render/gal/DeviceNull.h).
+        Null = 6,
+#endif
     };
 
     /**
@@ -42,8 +47,14 @@ namespace gpg::gal
      */
     [[nodiscard]] constexpr bool UsesD3D10EffectDialect(const DeviceApi api) noexcept
     {
+#if defined(FAF_POSIX)
+        // The null device stands in for Vulkan, the POSIX renderer: same dialect.
+        return api == DeviceApi::Direct3D10 || api == DeviceApi::Direct3D11 || api == DeviceApi::Direct3D12 ||
+            api == DeviceApi::Vulkan || api == DeviceApi::Null;
+#else
         return api == DeviceApi::Direct3D10 || api == DeviceApi::Direct3D11 || api == DeviceApi::Direct3D12 ||
             api == DeviceApi::Vulkan;
+#endif
     }
 
     /**

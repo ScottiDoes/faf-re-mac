@@ -1,0 +1,639 @@
+diff --git a/Foundation/Curves/Wm3CubicPolynomialCurve2.cpp b/Foundation/Curves/Wm3CubicPolynomialCurve2.cpp
+index 76f0c10..aa0482f 100644
+--- a/Foundation/Curves/Wm3CubicPolynomialCurve2.cpp
++++ b/Foundation/Curves/Wm3CubicPolynomialCurve2.cpp
+@@ -61,14 +61,14 @@ void CubicPolynomialCurve2<Real>::Tessellate (int iLevel)
+ 
+     // vertices for subdivision
+     Vector2<Real>* akX = m_akVertex;
+-    akX[kIP.m_iI0] = GetPosition(m_fTMin);
+-    akX[kIP.m_iI1] = GetPosition(m_fTMax);
++    akX[kIP.m_iI0] = this->GetPosition(m_fTMin);
++    akX[kIP.m_iI1] = this->GetPosition(m_fTMax);
+ 
+     // recursive subdivision
+     if (iLevel > 0)
+     {
+-        kIP.m_akXuu[0] = GetSecondDerivative(m_fTMin);
+-        kIP.m_akXuu[1] = GetSecondDerivative(m_fTMax);
++        kIP.m_akXuu[0] = this->GetSecondDerivative(m_fTMin);
++        kIP.m_akXuu[1] = this->GetSecondDerivative(m_fTMax);
+ 
+         Subdivide(--iLevel,(Real)0.25,akX,kIP);
+     }
+diff --git a/Foundation/Curves/Wm3CubicPolynomialCurve3.cpp b/Foundation/Curves/Wm3CubicPolynomialCurve3.cpp
+index 17230ce..fd4a0dc 100644
+--- a/Foundation/Curves/Wm3CubicPolynomialCurve3.cpp
++++ b/Foundation/Curves/Wm3CubicPolynomialCurve3.cpp
+@@ -63,14 +63,14 @@ void CubicPolynomialCurve3<Real>::Tessellate (int iLevel)
+ 
+     // vertices for subdivision
+     Vector3<Real>* akX = m_akVertex;
+-    akX[kIP.m_iI0] = GetPosition(m_fTMin);
+-    akX[kIP.m_iI1] = GetPosition(m_fTMax);
++    akX[kIP.m_iI0] = this->GetPosition(m_fTMin);
++    akX[kIP.m_iI1] = this->GetPosition(m_fTMax);
+ 
+     // recursive subdivision
+     if (iLevel > 0)
+     {
+-        kIP.m_akXuu[0] = GetSecondDerivative(m_fTMin);
+-        kIP.m_akXuu[1] = GetSecondDerivative(m_fTMax);
++        kIP.m_akXuu[0] = this->GetSecondDerivative(m_fTMin);
++        kIP.m_akXuu[1] = this->GetSecondDerivative(m_fTMax);
+ 
+         Subdivide(--iLevel,(Real)0.25,akX,kIP);
+     }
+diff --git a/Foundation/Curves/Wm3MultipleCurve2.cpp b/Foundation/Curves/Wm3MultipleCurve2.cpp
+index 9c652ec..d5b4315 100644
+--- a/Foundation/Curves/Wm3MultipleCurve2.cpp
++++ b/Foundation/Curves/Wm3MultipleCurve2.cpp
+@@ -220,12 +220,12 @@ Real MultipleCurve2<Real>::GetVariation (Real fT0, Real fT1,
+     Vector2<Real> kP0, kP1;
+     if (!pkP0)
+     {
+-        kP0 = GetPosition(fT0);
++        kP0 = this->GetPosition(fT0);
+         pkP0 = &kP0;
+     }
+     if (!pkP1)
+     {
+-        kP1 = GetPosition(fT1);
++        kP1 = this->GetPosition(fT1);
+         pkP1 = &kP1;
+     }
+     Real fInvDT = ((Real)1.0)/(fT1 - fT0);
+diff --git a/Foundation/Curves/Wm3MultipleCurve3.cpp b/Foundation/Curves/Wm3MultipleCurve3.cpp
+index a89cfee..e0d0e22 100644
+--- a/Foundation/Curves/Wm3MultipleCurve3.cpp
++++ b/Foundation/Curves/Wm3MultipleCurve3.cpp
+@@ -220,12 +220,12 @@ Real MultipleCurve3<Real>::GetVariation (Real fT0, Real fT1,
+     Vector3<Real> kP0, kP1;
+     if (!pkP0)
+     {
+-        kP0 = GetPosition(fT0);
++        kP0 = this->GetPosition(fT0);
+         pkP0 = &kP0;
+     }
+     if (!pkP1)
+     {
+-        kP1 = GetPosition(fT1);
++        kP1 = this->GetPosition(fT1);
+         pkP1 = &kP1;
+     }
+     Real fInvDT = ((Real)1.0)/(fT1 - fT0);
+diff --git a/Foundation/Curves/Wm3NaturalSpline2.cpp b/Foundation/Curves/Wm3NaturalSpline2.cpp
+index d64d674..2cc739d 100644
+--- a/Foundation/Curves/Wm3NaturalSpline2.cpp
++++ b/Foundation/Curves/Wm3NaturalSpline2.cpp
+@@ -295,7 +295,7 @@ Vector2<Real> NaturalSpline2<Real>::GetPosition (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     Vector2<Real> kResult = m_akA[iKey] + fDt*(m_akB[iKey] + fDt*(
+         m_akC[iKey] + fDt*m_akD[iKey]));
+@@ -308,7 +308,7 @@ Vector2<Real> NaturalSpline2<Real>::GetFirstDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     Vector2<Real> kResult = m_akB[iKey] + fDt*(m_akC[iKey]*((Real)2.0) +
+         m_akD[iKey]*(((Real)3.0)*fDt));
+@@ -321,7 +321,7 @@ Vector2<Real> NaturalSpline2<Real>::GetSecondDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     Vector2<Real> kResult = m_akC[iKey]*((Real)2.0) +
+         m_akD[iKey]*(((Real)6.0)*fDt);
+@@ -334,7 +334,7 @@ Vector2<Real> NaturalSpline2<Real>::GetThirdDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     Vector2<Real> kResult = ((Real)6.0)*m_akD[iKey];
+ 
+diff --git a/Foundation/Curves/Wm3NaturalSpline3.cpp b/Foundation/Curves/Wm3NaturalSpline3.cpp
+index c19fda2..b791f02 100644
+--- a/Foundation/Curves/Wm3NaturalSpline3.cpp
++++ b/Foundation/Curves/Wm3NaturalSpline3.cpp
+@@ -305,7 +305,7 @@ Vector3<Real> NaturalSpline3<Real>::GetPosition (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     Vector3<Real> kResult = m_akA[iKey] + fDt*(m_akB[iKey] + fDt*(m_akC[iKey]
+         + fDt*m_akD[iKey]));
+@@ -318,7 +318,7 @@ Vector3<Real> NaturalSpline3<Real>::GetFirstDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     Vector3<Real> kResult = m_akB[iKey] + fDt*(((Real)2.0)*m_akC[iKey] +
+         ((Real)3.0)*fDt*m_akD[iKey]);
+@@ -331,7 +331,7 @@ Vector3<Real> NaturalSpline3<Real>::GetSecondDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     Vector3<Real> kResult = ((Real)2.0)*m_akC[iKey] +
+         ((Real)6.0)*fDt*m_akD[iKey];
+@@ -344,7 +344,7 @@ Vector3<Real> NaturalSpline3<Real>::GetThirdDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     Vector3<Real> kResult = ((Real)6.0)*m_akD[iKey];
+ 
+diff --git a/Foundation/Curves/Wm3SingleCurve2.cpp b/Foundation/Curves/Wm3SingleCurve2.cpp
+index 69a832d..841a9a8 100644
+--- a/Foundation/Curves/Wm3SingleCurve2.cpp
++++ b/Foundation/Curves/Wm3SingleCurve2.cpp
+@@ -66,7 +66,7 @@ Real SingleCurve2<Real>::GetTime (Real fLength, int iIterations,
+             return fTime;
+         }
+ 
+-        fTime -= fDifference/GetSpeed(fTime);
++        fTime -= fDifference/this->GetSpeed(fTime);
+     }
+ 
+     // Newton's method failed.  If this happens, increase iterations or
+diff --git a/Foundation/Curves/Wm3SingleCurve3.cpp b/Foundation/Curves/Wm3SingleCurve3.cpp
+index 661ca26..0672de3 100644
+--- a/Foundation/Curves/Wm3SingleCurve3.cpp
++++ b/Foundation/Curves/Wm3SingleCurve3.cpp
+@@ -66,7 +66,7 @@ Real SingleCurve3<Real>::GetTime (Real fLength, int iIterations,
+             return fTime;
+         }
+ 
+-        fTime -= fDifference/GetSpeed(fTime);
++        fTime -= fDifference/this->GetSpeed(fTime);
+     }
+ 
+     // Newton's method failed.  If this happens, increase iterations or
+diff --git a/Foundation/Curves/Wm3TCBSpline2.cpp b/Foundation/Curves/Wm3TCBSpline2.cpp
+index f1668b9..82a1109 100644
+--- a/Foundation/Curves/Wm3TCBSpline2.cpp
++++ b/Foundation/Curves/Wm3TCBSpline2.cpp
+@@ -128,7 +128,7 @@ Vector2<Real> TCBSpline2<Real>::GetPosition (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     fDt /= (m_afTime[iKey+1] - m_afTime[iKey]);
+ 
+@@ -143,7 +143,7 @@ Vector2<Real> TCBSpline2<Real>::GetFirstDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     fDt /= (m_afTime[iKey+1] - m_afTime[iKey]);
+ 
+@@ -158,7 +158,7 @@ Vector2<Real> TCBSpline2<Real>::GetSecondDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     fDt /= (m_afTime[iKey+1] - m_afTime[iKey]);
+ 
+@@ -173,7 +173,7 @@ Vector2<Real> TCBSpline2<Real>::GetThirdDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     fDt /= (m_afTime[iKey+1] - m_afTime[iKey]);
+ 
+diff --git a/Foundation/Curves/Wm3TCBSpline3.cpp b/Foundation/Curves/Wm3TCBSpline3.cpp
+index a3ee94f..4aadc0a 100644
+--- a/Foundation/Curves/Wm3TCBSpline3.cpp
++++ b/Foundation/Curves/Wm3TCBSpline3.cpp
+@@ -128,7 +128,7 @@ Vector3<Real> TCBSpline3<Real>::GetPosition (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     fDt /= (m_afTime[iKey+1] - m_afTime[iKey]);
+ 
+@@ -143,7 +143,7 @@ Vector3<Real> TCBSpline3<Real>::GetFirstDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     fDt /= (m_afTime[iKey+1] - m_afTime[iKey]);
+ 
+@@ -158,7 +158,7 @@ Vector3<Real> TCBSpline3<Real>::GetSecondDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     fDt /= (m_afTime[iKey+1] - m_afTime[iKey]);
+ 
+@@ -173,7 +173,7 @@ Vector3<Real> TCBSpline3<Real>::GetThirdDerivative (Real fTime) const
+ {
+     int iKey;
+     Real fDt;
+-    GetKeyInfo(fTime,iKey,fDt);
++    this->GetKeyInfo(fTime,iKey,fDt);
+ 
+     fDt /= (m_afTime[iKey+1] - m_afTime[iKey]);
+ 
+diff --git a/Foundation/Interpolation/Wm3IntpAkimaNonuniform1.cpp b/Foundation/Interpolation/Wm3IntpAkimaNonuniform1.cpp
+index 2f00ce4..a91488a 100644
+--- a/Foundation/Interpolation/Wm3IntpAkimaNonuniform1.cpp
++++ b/Foundation/Interpolation/Wm3IntpAkimaNonuniform1.cpp
+@@ -43,7 +43,7 @@ IntpAkimaNonuniform1<Real>::IntpAkimaNonuniform1 (int iQuantity, Real* afX,
+     Real* afFDer = WM3_NEW Real[iQuantity];
+     for (i = 0; i < iQuantity; i++)
+     {
+-        afFDer[i] = ComputeDerivative(afSlope+i);
++        afFDer[i] = this->ComputeDerivative(afSlope+i);
+     }
+ 
+     // construct polynomials
+diff --git a/Foundation/Interpolation/Wm3IntpAkimaUniform1.cpp b/Foundation/Interpolation/Wm3IntpAkimaUniform1.cpp
+index 2fd7e16..eac2205 100644
+--- a/Foundation/Interpolation/Wm3IntpAkimaUniform1.cpp
++++ b/Foundation/Interpolation/Wm3IntpAkimaUniform1.cpp
+@@ -46,7 +46,7 @@ IntpAkimaUniform1<Real>::IntpAkimaUniform1 (int iQuantity, Real fXMin,
+     Real* afFDer = WM3_NEW Real[iQuantity];
+     for (i = 0; i < iQuantity; i++)
+     {
+-        afFDer[i] = ComputeDerivative(afSlope+i);
++        afFDer[i] = this->ComputeDerivative(afSlope+i);
+     }
+ 
+     // construct polynomials
+diff --git a/Foundation/Interpolation/Wm3IntpBSplineUniform1.cpp b/Foundation/Interpolation/Wm3IntpBSplineUniform1.cpp
+index c51e88d..55f898c 100644
+--- a/Foundation/Interpolation/Wm3IntpBSplineUniform1.cpp
++++ b/Foundation/Interpolation/Wm3IntpBSplineUniform1.cpp
+@@ -55,7 +55,7 @@ Real IntpBSplineUniform1<Real>::operator() (Real fX)
+         ComputeIntermediate();
+     }
+ 
+-    SetPolynomial(0,fX-m_aiBase[0],m_aafPoly[0]);
++    this->SetPolynomial(0,fX-m_aiBase[0],m_aafPoly[0]);
+ 
+     Real fResult = (Real)0.0;
+     for (int k = 0; k <= m_iDegree; k++)
+@@ -85,7 +85,7 @@ Real IntpBSplineUniform1<Real>::operator() (int iDx, Real fX)
+         ComputeIntermediate();
+     }
+ 
+-    SetPolynomial(iDx,fX-m_aiBase[0],m_aafPoly[0]);
++    this->SetPolynomial(iDx,fX-m_aiBase[0],m_aafPoly[0]);
+ 
+     Real fResult = (Real)0.0;
+     for (int k = iDx; k <= m_iDegree; k++)
+diff --git a/Foundation/Interpolation/Wm3IntpBSplineUniform2.cpp b/Foundation/Interpolation/Wm3IntpBSplineUniform2.cpp
+index 0010b07..564e0f6 100644
+--- a/Foundation/Interpolation/Wm3IntpBSplineUniform2.cpp
++++ b/Foundation/Interpolation/Wm3IntpBSplineUniform2.cpp
+@@ -69,8 +69,8 @@ Real IntpBSplineUniform2<Real>::operator() (Real fX, Real fY)
+         }
+     }
+ 
+-    SetPolynomial(0,fX-m_aiBase[0],m_aafPoly[0]);
+-    SetPolynomial(0,fY-m_aiBase[1],m_aafPoly[1]);
++    this->SetPolynomial(0,fX-m_aiBase[0],m_aafPoly[0]);
++    this->SetPolynomial(0,fY-m_aiBase[1],m_aafPoly[1]);
+ 
+     int aiI[2] = { 0, 0 };
+     Real fResult = (Real)0.0;
+@@ -118,8 +118,8 @@ Real IntpBSplineUniform2<Real>::operator() (int iDx, int iDy, Real fX,
+         }
+     }
+ 
+-    SetPolynomial(iDx,fX-m_aiBase[0],m_aafPoly[0]);
+-    SetPolynomial(iDy,fY-m_aiBase[1],m_aafPoly[1]);
++    this->SetPolynomial(iDx,fX-m_aiBase[0],m_aafPoly[0]);
++    this->SetPolynomial(iDy,fY-m_aiBase[1],m_aafPoly[1]);
+ 
+     int aiI[2] = { iDx, iDy };
+     int iIncr1 = iDx;
+diff --git a/Foundation/Interpolation/Wm3IntpBSplineUniform3.cpp b/Foundation/Interpolation/Wm3IntpBSplineUniform3.cpp
+index ad85504..229ae2a 100644
+--- a/Foundation/Interpolation/Wm3IntpBSplineUniform3.cpp
++++ b/Foundation/Interpolation/Wm3IntpBSplineUniform3.cpp
+@@ -70,9 +70,9 @@ Real IntpBSplineUniform3<Real>::operator() (Real fX, Real fY, Real fZ)
+         }
+     }
+ 
+-    SetPolynomial(0,fX-m_aiBase[0],m_aafPoly[0]);
+-    SetPolynomial(0,fY-m_aiBase[1],m_aafPoly[1]);
+-    SetPolynomial(0,fZ-m_aiBase[2],m_aafPoly[2]);
++    this->SetPolynomial(0,fX-m_aiBase[0],m_aafPoly[0]);
++    this->SetPolynomial(0,fY-m_aiBase[1],m_aafPoly[1]);
++    this->SetPolynomial(0,fZ-m_aiBase[2],m_aafPoly[2]);
+ 
+     int aiI[3] = { 0, 0, 0 };
+     Real fResult = (Real)0.0;
+@@ -128,9 +128,9 @@ Real IntpBSplineUniform3<Real>::operator() (int iDx, int iDy, int iDz,
+         }
+     }
+ 
+-    SetPolynomial(iDx,fX-m_aiBase[0],m_aafPoly[0]);
+-    SetPolynomial(iDy,fY-m_aiBase[1],m_aafPoly[1]);
+-    SetPolynomial(iDz,fZ-m_aiBase[2],m_aafPoly[2]);
++    this->SetPolynomial(iDx,fX-m_aiBase[0],m_aafPoly[0]);
++    this->SetPolynomial(iDy,fY-m_aiBase[1],m_aafPoly[1]);
++    this->SetPolynomial(iDz,fZ-m_aiBase[2],m_aafPoly[2]);
+ 
+     int aiI[3] = { iDx, iDy, iDz };
+     int aiDelta[2] = { iDx, m_iDp1*iDy };
+diff --git a/Foundation/Interpolation/Wm3IntpBSplineUniform4.cpp b/Foundation/Interpolation/Wm3IntpBSplineUniform4.cpp
+index 58faabe..9a2fb32 100644
+--- a/Foundation/Interpolation/Wm3IntpBSplineUniform4.cpp
++++ b/Foundation/Interpolation/Wm3IntpBSplineUniform4.cpp
+@@ -73,10 +73,10 @@ Real IntpBSplineUniform4<Real>::operator() (Real fX, Real fY, Real fZ,
+         }
+     }
+ 
+-    SetPolynomial(0,fX-m_aiBase[0],m_aafPoly[0]);
+-    SetPolynomial(0,fY-m_aiBase[1],m_aafPoly[1]);
+-    SetPolynomial(0,fZ-m_aiBase[2],m_aafPoly[2]);
+-    SetPolynomial(0,fW-m_aiBase[3],m_aafPoly[3]);
++    this->SetPolynomial(0,fX-m_aiBase[0],m_aafPoly[0]);
++    this->SetPolynomial(0,fY-m_aiBase[1],m_aafPoly[1]);
++    this->SetPolynomial(0,fZ-m_aiBase[2],m_aafPoly[2]);
++    this->SetPolynomial(0,fW-m_aiBase[3],m_aafPoly[3]);
+ 
+     int aiI[4] = { 0, 0, 0, 0 };
+     Real fResult = (Real)0.0;
+@@ -139,10 +139,10 @@ Real IntpBSplineUniform4<Real>::operator() (int iDx, int iDy, int iDz,
+         }
+     }
+ 
+-    SetPolynomial(iDx,fX-m_aiBase[0],m_aafPoly[0]);
+-    SetPolynomial(iDy,fY-m_aiBase[1],m_aafPoly[1]);
+-    SetPolynomial(iDz,fZ-m_aiBase[2],m_aafPoly[2]);
+-    SetPolynomial(iDw,fW-m_aiBase[3],m_aafPoly[3]);
++    this->SetPolynomial(iDx,fX-m_aiBase[0],m_aafPoly[0]);
++    this->SetPolynomial(iDy,fY-m_aiBase[1],m_aafPoly[1]);
++    this->SetPolynomial(iDz,fZ-m_aiBase[2],m_aafPoly[2]);
++    this->SetPolynomial(iDw,fW-m_aiBase[3],m_aafPoly[3]);
+ 
+     int aiI[4] = { iDx, iDy, iDz, iDw };
+     int aiDelta[3] =  { iDx, m_iDp1*iDy, m_iDp1*m_iDp1*iDz };
+diff --git a/Foundation/Interpolation/Wm3IntpBSplineUniformN.cpp b/Foundation/Interpolation/Wm3IntpBSplineUniformN.cpp
+index 1d4009b..e133d5b 100644
+--- a/Foundation/Interpolation/Wm3IntpBSplineUniformN.cpp
++++ b/Foundation/Interpolation/Wm3IntpBSplineUniformN.cpp
+@@ -93,7 +93,7 @@ Real IntpBSplineUniformN<Real>::operator() (Real* afX)
+ 
+     for (iDim = 0; iDim < m_iDims; iDim++)
+     {
+-        SetPolynomial(0,afX[iDim]-m_aiBase[iDim],m_aafPoly[iDim]);
++        this->SetPolynomial(0,afX[iDim]-m_aiBase[iDim],m_aafPoly[iDim]);
+     }
+ 
+     for (iDim = 0; iDim < m_iDims; iDim++)
+@@ -158,7 +158,7 @@ Real IntpBSplineUniformN<Real>::operator() (int* aiDx, Real* afX)
+ 
+     for (iDim = 0; iDim < m_iDims; iDim++)
+     {
+-        SetPolynomial(aiDx[iDim],afX[iDim]-m_aiBase[iDim],m_aafPoly[iDim]);
++        this->SetPolynomial(aiDx[iDim],afX[iDim]-m_aiBase[iDim],m_aafPoly[iDim]);
+     }
+ 
+     for (iDim = 0; iDim < m_iDims; iDim++)
+diff --git a/Foundation/Miscellaneous/Wm3GridGraph2.cpp b/Foundation/Miscellaneous/Wm3GridGraph2.cpp
+index 956f1ce..9f0644f 100644
+--- a/Foundation/Miscellaneous/Wm3GridGraph2.cpp
++++ b/Foundation/Miscellaneous/Wm3GridGraph2.cpp
+@@ -227,6 +227,28 @@ void GridGraph2<Real>::SaveVertices (const char* acEstFile,
+ //----------------------------------------------------------------------------
+ // explicit instantiation
+ //----------------------------------------------------------------------------
++#ifdef WM3_INSTANTIATE_BEFORE
++
++template<>
++const int GridGraph2<float>::ms_aaiIndex[3][3] =
++{
++    {0,1,2}, {3,-1,4}, {5,6,7}
++};
++
++template WM3_ITEM
++class GridGraph2<float>;
++
++template<>
++const int GridGraph2<double>::ms_aaiIndex[3][3] =
++{
++    {0,1,2}, {3,-1,4}, {5,6,7}
++};
++
++template WM3_ITEM
++class GridGraph2<double>;
++
++#else
++
+ template WM3_ITEM
+ class GridGraph2<float>;
+ 
+@@ -244,6 +266,7 @@ const int GridGraph2<double>::ms_aaiIndex[3][3] =
+ {
+     {0,1,2}, {3,-1,4}, {5,6,7}
+ };
++#endif
+ //----------------------------------------------------------------------------
+ }
+ 
+diff --git a/Foundation/Numerics/Wm3OdeEuler.cpp b/Foundation/Numerics/Wm3OdeEuler.cpp
+index 507b26a..9c750bf 100644
+--- a/Foundation/Numerics/Wm3OdeEuler.cpp
++++ b/Foundation/Numerics/Wm3OdeEuler.cpp
+@@ -31,7 +31,7 @@ template <class Real>
+ void OdeEuler<Real>::Update (Real fTIn, Real* afXIn, Real& rfTOut,
+     Real* afXOut)
+ {
+-    m_oFunction(fTIn,afXIn,m_pvData,m_afFValue);
++    this->m_oFunction(fTIn,afXIn,m_pvData,m_afFValue);
+     for (int i = 0; i < m_iDim; i++)
+     {
+         afXOut[i] = afXIn[i] + m_fStep*m_afFValue[i];
+diff --git a/Foundation/Numerics/Wm3OdeImplicitEuler.cpp b/Foundation/Numerics/Wm3OdeImplicitEuler.cpp
+index a695787..4bbf1ba 100644
+--- a/Foundation/Numerics/Wm3OdeImplicitEuler.cpp
++++ b/Foundation/Numerics/Wm3OdeImplicitEuler.cpp
+@@ -40,7 +40,7 @@ template <class Real>
+ void OdeImplicitEuler<Real>::Update (Real fTIn, Real* afXIn, Real& rfTOut,
+     Real* afXOut)
+ {
+-    m_oFunction(fTIn,afXIn,m_pvData,m_kF);
++    this->m_oFunction(fTIn,afXIn,m_pvData,m_kF);
+     m_oDFunction(fTIn,afXIn,m_pvData,m_kDF);
+     GMatrix<Real> kDG = m_kIdentity - m_fStep*m_kDF;
+     GMatrix<Real> kDGInverse(m_iDim,m_iDim);
+diff --git a/Foundation/Numerics/Wm3OdeMidpoint.cpp b/Foundation/Numerics/Wm3OdeMidpoint.cpp
+index 50f01bc..9e1b2b6 100644
+--- a/Foundation/Numerics/Wm3OdeMidpoint.cpp
++++ b/Foundation/Numerics/Wm3OdeMidpoint.cpp
+@@ -37,7 +37,7 @@ void OdeMidpoint<Real>::Update (Real fTIn, Real* afXIn, Real& rfTOut,
+     int i;
+ 
+     // first step
+-    m_oFunction(fTIn,afXIn,m_pvData,m_afFValue);
++    this->m_oFunction(fTIn,afXIn,m_pvData,m_afFValue);
+     for (i = 0; i < m_iDim; i++)
+     {
+         m_afXTemp[i] = afXIn[i] + m_fHalfStep*m_afFValue[i];
+@@ -45,7 +45,7 @@ void OdeMidpoint<Real>::Update (Real fTIn, Real* afXIn, Real& rfTOut,
+ 
+     // second step
+     Real fHalfT = fTIn + m_fHalfStep;
+-    m_oFunction(fHalfT,m_afXTemp,m_pvData,m_afFValue);
++    this->m_oFunction(fHalfT,m_afXTemp,m_pvData,m_afFValue);
+     for (i = 0; i < m_iDim; i++)
+     {
+         afXOut[i] = afXIn[i] + m_fStep*m_afFValue[i];
+diff --git a/Foundation/Numerics/Wm3OdeRungeKutta4.cpp b/Foundation/Numerics/Wm3OdeRungeKutta4.cpp
+index 9c00340..b2da944 100644
+--- a/Foundation/Numerics/Wm3OdeRungeKutta4.cpp
++++ b/Foundation/Numerics/Wm3OdeRungeKutta4.cpp
+@@ -46,7 +46,7 @@ void OdeRungeKutta4<Real>::Update (Real fTIn, Real* afXIn, Real& rfTOut,
+     int i;
+ 
+     // first step
+-    m_oFunction(fTIn,afXIn,m_pvData,m_afTemp1);
++    this->m_oFunction(fTIn,afXIn,m_pvData,m_afTemp1);
+     for (i = 0; i < m_iDim; i++)
+     {
+         m_afXTemp[i] = afXIn[i] + m_fHalfStep*m_afTemp1[i];
+@@ -54,14 +54,14 @@ void OdeRungeKutta4<Real>::Update (Real fTIn, Real* afXIn, Real& rfTOut,
+ 
+     // second step
+     Real fHalfT = fTIn + m_fHalfStep;
+-    m_oFunction(fHalfT,m_afXTemp,m_pvData,m_afTemp2);
++    this->m_oFunction(fHalfT,m_afXTemp,m_pvData,m_afTemp2);
+     for (i = 0; i < m_iDim; i++)
+     {
+         m_afXTemp[i] = afXIn[i] + m_fHalfStep*m_afTemp2[i];
+     }
+ 
+     // third step
+-    m_oFunction(fHalfT,m_afXTemp,m_pvData,m_afTemp3);
++    this->m_oFunction(fHalfT,m_afXTemp,m_pvData,m_afTemp3);
+     for (i = 0; i < m_iDim; i++)
+     {
+         m_afXTemp[i] = afXIn[i] + m_fStep*m_afTemp3[i];
+@@ -69,7 +69,7 @@ void OdeRungeKutta4<Real>::Update (Real fTIn, Real* afXIn, Real& rfTOut,
+ 
+     // fourth step
+     rfTOut = fTIn + m_fStep;
+-    m_oFunction(rfTOut,m_afXTemp,m_pvData,m_afTemp4);
++    this->m_oFunction(rfTOut,m_afXTemp,m_pvData,m_afTemp4);
+     for (i = 0; i < m_iDim; i++)
+     {
+         afXOut[i] = afXIn[i] + m_fSixthStep*(m_afTemp1[i] +
+diff --git a/Foundation/Physics/Wm3LCPPolyDist.cpp b/Foundation/Physics/Wm3LCPPolyDist.cpp
+index ed1266e..4eb6941 100644
+--- a/Foundation/Physics/Wm3LCPPolyDist.cpp
++++ b/Foundation/Physics/Wm3LCPPolyDist.cpp
+@@ -166,7 +166,7 @@ double LCPPolyDist<VectorIn,TVector,TTuple>::ProcessLoop (bool bHS,
+         double* adWResult = WM3_NEW double[m_iNumEquations];
+         int iReturn;
+ 
+-        LCPSolver::LCPSolver(m_iNumEquations,aadM,adQ,adZResult,adWResult,
++        LCPSolver(m_iNumEquations,aadM,adQ,adZResult,adWResult,
+             iReturn);
+ 
+         switch (iReturn)
+diff --git a/Foundation/RationalArithmetic/Wm3Query2Filtered.inl b/Foundation/RationalArithmetic/Wm3Query2Filtered.inl
+index e182f09..4a8d700 100644
+--- a/Foundation/RationalArithmetic/Wm3Query2Filtered.inl
++++ b/Foundation/RationalArithmetic/Wm3Query2Filtered.inl
+@@ -47,7 +47,7 @@ int Query2Filtered<Real>::ToLine (const Vector2<Real>& rkP, int iV0, int iV1)
+     Real fLen1 = Math<Real>::Sqrt(fX1*fX1 + fY1*fY1);
+     Real fScaledUncertainty = m_fUncertainty*fLen0*fLen1;
+ 
+-    Real fDet2 = Det2(fX0,fY0,fX1,fY1);
++    Real fDet2 = this->Det2(fX0,fY0,fX1,fY1);
+     if (Math<Real>::FAbs(fDet2) >= fScaledUncertainty)
+     {
+         return (fDet2 > (Real)0.0 ? +1 : (fDet2 < (Real)0.0 ? -1 : 0));
+@@ -85,7 +85,7 @@ int Query2Filtered<Real>::ToCircumcircle (const Vector2<Real>& rkP, int iV0,
+     Real fLen2 = Math<Real>::Sqrt(fD2x*fD2x + fD2y*fD2y + fZ2*fZ2);
+     Real fScaledUncertainty = m_fUncertainty*fLen0*fLen1*fLen2;
+ 
+-    Real fDet3 = Det3(fD0x,fD0y,fZ0,fD1x,fD1y,fZ1,fD2x,fD2y,fZ2);
++    Real fDet3 = this->Det3(fD0x,fD0y,fZ0,fD1x,fD1y,fZ1,fD2x,fD2y,fZ2);
+     if (Math<Real>::FAbs(fDet3) >= fScaledUncertainty)
+     {
+         return (fDet3 < (Real)0.0 ? 1 : (fDet3 > (Real)0.0 ? -1 : 0));
+diff --git a/Foundation/RationalArithmetic/Wm3Query3Filtered.inl b/Foundation/RationalArithmetic/Wm3Query3Filtered.inl
+index cf46184..e78ab78 100644
+--- a/Foundation/RationalArithmetic/Wm3Query3Filtered.inl
++++ b/Foundation/RationalArithmetic/Wm3Query3Filtered.inl
+@@ -54,7 +54,7 @@ int Query3Filtered<Real>::ToPlane (const Vector3<Real>& rkP, int iV0, int iV1,
+     Real fLen2 = Math<Real>::Sqrt(fX2*fX2 + fY2*fY2 + fZ2*fZ2);
+     Real fScaledUncertainty = m_fUncertainty*fLen0*fLen1*fLen2;
+ 
+-    Real fDet3 = Det3(fX0,fY0,fZ0,fX1,fY1,fZ1,fX2,fY2,fZ2);
++    Real fDet3 = this->Det3(fX0,fY0,fZ0,fX1,fY1,fZ1,fX2,fY2,fZ2);
+     if (Math<Real>::FAbs(fDet3) >= fScaledUncertainty)
+     {
+         return (fDet3 > (Real)0.0 ? +1 : (fDet3 < (Real)0.0 ? -1 : 0));
+@@ -107,7 +107,7 @@ int Query3Filtered<Real>::ToCircumsphere (const Vector3<Real>& rkP, int iV0,
+     Real fLen3 = Math<Real>::Sqrt(fD3x*fD3x+fD3y*fD3y+fD3z*fD3z+fW3*fW3);
+     Real fScaledUncertainty = m_fUncertainty*fLen0*fLen1*fLen2*fLen3;
+ 
+-    Real fDet4 = Det4(fD0x,fD0y,fD0z,fW0,fD1x,fD1y,fD1z,fW1,fD2x,
++    Real fDet4 = this->Det4(fD0x,fD0y,fD0z,fW0,fD1x,fD1y,fD1z,fW1,fD2x,
+         fD2y,fD2z,fW2,fD3x,fD3y,fD3z,fW3);
+ 
+     if (Math<Real>::FAbs(fDet4) >= fScaledUncertainty)
+diff --git a/Foundation/System/Wm3Platforms.h b/Foundation/System/Wm3Platforms.h
+index 01e0328..7a7bf1d 100644
+--- a/Foundation/System/Wm3Platforms.h
++++ b/Foundation/System/Wm3Platforms.h
+@@ -100,14 +100,18 @@ typedef __int64 Integer64;
+ //----------------------------------------------------------------------------
+ #elif defined(__APPLE__)
+ 
++// FAF macOS port: only PowerPC Macs are big-endian (Apple Silicon and Intel are not).
++#if defined(__BIG_ENDIAN__)
+ #define WM3_BIG_ENDIAN
++#endif
+ 
+ #include <stdint.h>
+ typedef int64_t Integer64;
+ 
+ // g++ wants specialized template instantiations to occur after the explicit
+ // class instantiations.  CodeWarrior wants them to occur before.
+-#ifdef __MWERKS__
++// FAF macOS port: so does clang ("explicit specialization after instantiation").
++#if defined(__MWERKS__) || defined(__clang__)
+ #define WM3_INSTANTIATE_BEFORE
+ #endif
+ //----------------------------------------------------------------------------

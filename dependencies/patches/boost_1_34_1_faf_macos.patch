@@ -1,0 +1,306 @@
+diff --git a/boost/detail/interlocked.hpp b/boost/detail/interlocked.hpp
+index 76a24c3..534ffd3 100644
+--- a/boost/detail/interlocked.hpp
++++ b/boost/detail/interlocked.hpp
+@@ -19,7 +19,7 @@
+ 
+ #include <boost/config.hpp>
+ 
+-#if defined( BOOST_USE_WINDOWS_H )
++#if defined( BOOST_USE_WINDOWS_H ) || defined( FAF_POSIX ) // FAF_POSIX: platform/posix/WinCompat.h
+ 
+ # include <windows.h>
+ 
+diff --git a/boost/detail/sp_counted_base.hpp b/boost/detail/sp_counted_base.hpp
+index bc170ca..56de727 100644
+--- a/boost/detail/sp_counted_base.hpp
++++ b/boost/detail/sp_counted_base.hpp
+@@ -27,6 +27,15 @@
+ 
+ # include <boost/detail/sp_counted_base_pt.hpp>
+ 
++#elif defined( FAF_POSIX )
++
++// FAF macOS port: the engine reads and adjusts shared_count's use/weak counts in place with
++// the Win32 Interlocked functions (gpg/core/algorithms/Cluster.cpp and friends), assuming the
++// Windows x64 layout { vptr, int32 use, int32 weak } (px at +0x10). The w32 variant with
++// 32-bit LONG counts (long is 64-bit on LP64); the Interlocked calls resolve to
++// platform/posix/compat/Sync.h.
++# include <boost/detail/sp_counted_base_faf_posix.hpp>
++
+ #elif defined( __GNUC__ ) && ( defined( __i386__ ) || defined( __x86_64__ ) )
+ 
+ # include <boost/detail/sp_counted_base_gcc_x86.hpp>
+diff --git a/boost/detail/sp_counted_base_faf_posix.hpp b/boost/detail/sp_counted_base_faf_posix.hpp
+new file mode 100644
+index 0000000..9a192df
+--- /dev/null
++++ b/boost/detail/sp_counted_base_faf_posix.hpp
+@@ -0,0 +1,119 @@
++#ifndef BOOST_DETAIL_SP_COUNTED_BASE_FAF_POSIX_HPP_INCLUDED
++#define BOOST_DETAIL_SP_COUNTED_BASE_FAF_POSIX_HPP_INCLUDED
++
++//
++//  detail/sp_counted_base_faf_posix.hpp
++//
++//  FAF macOS port (FAF_POSIX): a copy of sp_counted_base_w32.hpp whose counts are the
++//  Win32 32-bit LONG instead of `long` (64 bits on LP64). The engine views shared_count
++//  control blocks as { vptr, int32 use, int32 weak } with sp_counted_impl_p::px_ at +0x10,
++//  exactly the Windows x64 layout (gpg/core/utils/BoostWrappers.h SpCountedImplStorage,
++//  gpg/core/algorithms/Cluster.cpp), and adjusts the counts in place with the Win32
++//  Interlocked functions; platform/posix/compat/Sync.h makes those 32-bit atomics.
++//  Behaviour is the w32 variant's, line for line.
++//
++//  Copyright (c) 2001, 2002, 2003 Peter Dimov and Multi Media Ltd.
++//  Copyright 2004-2005 Peter Dimov
++//
++//  Distributed under the Boost Software License, Version 1.0. (See
++//  accompanying file LICENSE_1_0.txt or copy at
++//  http://www.boost.org/LICENSE_1_0.txt)
++//
++//
++//  Lock-free algorithm by Alexander Terekhov
++//
++//  Thanks to Ben Hitchings for the #weak + (#shared != 0)
++//  formulation
++//
++
++#include <boost/detail/interlocked.hpp>
++#include <typeinfo>
++
++namespace boost
++{
++
++namespace detail
++{
++
++class sp_counted_base
++{
++private:
++
++    sp_counted_base( sp_counted_base const & );
++    sp_counted_base & operator= ( sp_counted_base const & );
++
++    LONG use_count_;        // #shared
++    LONG weak_count_;       // #weak + (#shared != 0)
++
++public:
++
++    sp_counted_base(): use_count_( 1 ), weak_count_( 1 )
++    {
++    }
++
++    virtual ~sp_counted_base() // nothrow
++    {
++    }
++
++    // dispose() is called when use_count_ drops to zero, to release
++    // the resources managed by *this.
++
++    virtual void dispose() = 0; // nothrow
++
++    // destroy() is called when weak_count_ drops to zero.
++
++    virtual void destroy() // nothrow
++    {
++        delete this;
++    }
++
++    virtual void * get_deleter( std::type_info const & ti ) = 0;
++
++    void add_ref_copy()
++    {
++        BOOST_INTERLOCKED_INCREMENT( &use_count_ );
++    }
++
++    bool add_ref_lock() // true on success
++    {
++        for( ;; )
++        {
++            LONG tmp = static_cast< LONG const volatile& >( use_count_ );
++            if( tmp == 0 ) return false;
++            if( BOOST_INTERLOCKED_COMPARE_EXCHANGE( &use_count_, tmp + 1, tmp ) == tmp ) return true;
++        }
++    }
++
++    void release() // nothrow
++    {
++        if( BOOST_INTERLOCKED_DECREMENT( &use_count_ ) == 0 )
++        {
++            dispose();
++            weak_release();
++        }
++    }
++
++    void weak_add_ref() // nothrow
++    {
++        BOOST_INTERLOCKED_INCREMENT( &weak_count_ );
++    }
++
++    void weak_release() // nothrow
++    {
++        if( BOOST_INTERLOCKED_DECREMENT( &weak_count_ ) == 0 )
++        {
++            destroy();
++        }
++    }
++
++    long use_count() const // nothrow
++    {
++        return static_cast<LONG const volatile &>( use_count_ );
++    }
++};
++
++} // namespace detail
++
++} // namespace boost
++
++#endif  // #ifndef BOOST_DETAIL_SP_COUNTED_BASE_FAF_POSIX_HPP_INCLUDED
+diff --git a/boost/thread/xtime.hpp b/boost/thread/xtime.hpp
+index 610198f..08a6fd2 100644
+--- a/boost/thread/xtime.hpp
++++ b/boost/thread/xtime.hpp
+@@ -12,7 +12,7 @@
+ #include <boost/cstdint.hpp>
+ 
+ namespace boost {
+-#if defined(TIME_UTC) && defined(_MSC_VER)
++#if defined(TIME_UTC) && (defined(_MSC_VER) || defined(__clang__))
+ # pragma push_macro("TIME_UTC")
+ # undef TIME_UTC
+ # define BOOST_THREAD_RESTORE_TIME_UTC
+@@ -53,7 +53,7 @@ inline int xtime_cmp(const xtime& xt1, const xtime& xt2)
+     else 
+         return (xt1.sec > xt2.sec) ? 1 : -1;
+ }
+-#if defined(BOOST_THREAD_RESTORE_TIME_UTC) && defined(_MSC_VER)
++#if defined(BOOST_THREAD_RESTORE_TIME_UTC)
+ # pragma pop_macro("TIME_UTC")
+ # undef BOOST_THREAD_RESTORE_TIME_UTC
+ #endif
+diff --git a/libs/thread/src/mutex.cpp b/libs/thread/src/mutex.cpp
+index bb73b9c..acbba08 100644
+--- a/libs/thread/src/mutex.cpp
++++ b/libs/thread/src/mutex.cpp
+@@ -191,10 +191,38 @@ void timed_mutex::do_unlock(cv_state&)
+ 
+ #elif defined(BOOST_HAS_PTHREADS)
+ 
++#if defined(FAF_POSIX)
++// FAF macOS port: on Windows, boost::mutex and boost::try_mutex are critical sections
++// (new_critical_section above), which the owning thread may enter again. The engine relies
++// on that: e.g. Moho::STAT_GetLuaTable holds a StatItem's lock and calls StatItem::GetString,
++// which takes the same lock. A default pthread mutex deadlocks there, so the POSIX build
++// gives these two the Windows semantics with a recursive pthread mutex. boost::condition
++// waits work as before (the engine never waits with the lock held more than once, which
++// would deadlock on Windows too).
++namespace {
++int faf_init_windows_like_mutex(pthread_mutex_t* m)
++{
++    pthread_mutexattr_t attr;
++    int res = pthread_mutexattr_init(&attr);
++    if (res != 0)
++        return res;
++    res = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
++    if (res == 0)
++        res = pthread_mutex_init(m, &attr);
++    pthread_mutexattr_destroy(&attr);
++    return res;
++}
++} // namespace
++#endif
++
+ mutex::mutex()
+ {
+     int res = 0;
++#if defined(FAF_POSIX)
++    res = faf_init_windows_like_mutex(&m_mutex);
++#else
+     res = pthread_mutex_init(&m_mutex, 0);
++#endif
+     if (res != 0)
+         throw thread_resource_error();
+ }
+@@ -234,7 +262,11 @@ void mutex::do_unlock(cv_state& state)
+ try_mutex::try_mutex()
+ {
+     int res = 0;
++#if defined(FAF_POSIX)
++    res = faf_init_windows_like_mutex(&m_mutex);
++#else
+     res = pthread_mutex_init(&m_mutex, 0);
++#endif
+     if (res != 0)
+         throw thread_resource_error();
+ }
+diff --git a/libs/thread/src/thread.cpp b/libs/thread/src/thread.cpp
+index 67d5870..31b1906 100644
+--- a/libs/thread/src/thread.cpp
++++ b/libs/thread/src/thread.cpp
+@@ -11,6 +11,15 @@
+ #include <boost/thread/condition.hpp>
+ #include <cassert>
+ 
++#if defined(FAF_POSIX)
++// libc++ in C++20 has no std::auto_ptr; std::unique_ptr does the same job for these
++// sole-owner-then-release uses.
++#include <memory>
++#define BOOST_THREAD_FAF_AUTO_PTR std::unique_ptr
++#else
++#define BOOST_THREAD_FAF_AUTO_PTR std::auto_ptr
++#endif
++
+ #if defined(BOOST_HAS_WINTHREADS)
+ #   include <windows.h>
+ #   if !defined(BOOST_NO_THREADEX)
+@@ -320,7 +329,7 @@ thread* thread_group::create_thread(const function0<void>& threadfunc)
+ {
+     // No scoped_lock required here since the only "shared data" that's
+     // modified here occurs inside add_thread which does scoped_lock.
+-    std::auto_ptr<thread> thrd(new thread(threadfunc));
++    BOOST_THREAD_FAF_AUTO_PTR<thread> thrd(new thread(threadfunc));
+     add_thread(thrd.get());
+     return thrd.release();
+ }
+diff --git a/libs/thread/src/tss.cpp b/libs/thread/src/tss.cpp
+index 5c77bb5..ccecc56 100644
+--- a/libs/thread/src/tss.cpp
++++ b/libs/thread/src/tss.cpp
+@@ -17,6 +17,15 @@
+ #include <stdexcept>
+ #include <cassert>
+ 
++#if defined(FAF_POSIX)
++// libc++ in C++20 has no std::auto_ptr; std::unique_ptr does the same job for these
++// sole-owner-then-release uses.
++#include <memory>
++#define BOOST_THREAD_FAF_AUTO_PTR std::unique_ptr
++#else
++#define BOOST_THREAD_FAF_AUTO_PTR std::auto_ptr
++#endif
++
+ #if defined(BOOST_HAS_WINTHREADS)
+ #   include <windows.h>
+ #   include <boost/thread/detail/tss_hooks.hpp>
+@@ -88,10 +97,10 @@ extern "C" void cleanup_slots(void* p)
+ 
+ void init_tss_data()
+ {
+-    std::auto_ptr<tss_data_cleanup_handlers_type> 
++    BOOST_THREAD_FAF_AUTO_PTR<tss_data_cleanup_handlers_type> 
+         temp(new tss_data_cleanup_handlers_type);
+ 
+-    std::auto_ptr<boost::mutex> temp_mutex(new boost::mutex);
++    BOOST_THREAD_FAF_AUTO_PTR<boost::mutex> temp_mutex(new boost::mutex);
+     if (temp_mutex.get() == 0)
+         throw boost::thread_resource_error();
+ 
+@@ -151,7 +160,7 @@ tss_slots* get_slots(bool alloc)
+ 
+     if (slots == 0 && alloc)
+     {
+-        std::auto_ptr<tss_slots> temp(new tss_slots);
++        BOOST_THREAD_FAF_AUTO_PTR<tss_slots> temp(new tss_slots);
+ 
+ #if defined(BOOST_HAS_WINTHREADS)
+         if (at_thread_exit(&tss_thread_exit) == -1)

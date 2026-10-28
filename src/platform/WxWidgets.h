@@ -30,6 +30,14 @@
  * other way first.
  */
 
+#if defined(FAF_POSIX)
+// The POSIX build has no wxWidgets: platform/posix/wx is a header-only stand-in with the
+// API the engine uses (same names, signatures and constants; it displays nothing). It has
+// no debug configuration and no <windows.h> macros to undo, so the rest of this file does
+// not apply.
+#include <wx/defs.h>
+#else
+
 #if defined(_DEBUG) && !defined(NDEBUG)
   #define MOHO_WX_HELD_NDEBUG
   #define NDEBUG
@@ -59,3 +67,5 @@
 // defines them again.
 #include <windows.h>
 #include <wx/msw/winundef.h>
+
+#endif // FAF_POSIX

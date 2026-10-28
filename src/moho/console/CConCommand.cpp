@@ -1468,7 +1468,21 @@ void moho::CON_Debug_Crash(const msvc8::vector<msvc8::string>& args)
 void moho::CON_Debug_Throw(const msvc8::vector<msvc8::string>& args)
 {
   (void)args;
+#if defined(FAF_POSIX)
+  // MSVC's std::exception(const char*) constructor does not exist in libc++. Throw a
+  // type derived directly from std::exception (not runtime_error), so the same handlers
+  // catch it as on Windows, with the same what() text.
+  struct DebugThrowException final : std::exception
+  {
+    const char* what() const noexcept override
+    {
+      return "Hope you really wanted to do this...";
+    }
+  };
+  throw DebugThrowException{};
+#else
   throw std::exception("Hope you really wanted to do this...");
+#endif
 }
 
 /**

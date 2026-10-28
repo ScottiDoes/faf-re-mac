@@ -1284,6 +1284,23 @@ namespace
   [[nodiscard]] std::vector<gpg::gal::DeviceApi> RendererAttemptOrder()
   {
     using gpg::gal::DeviceApi;
+#if defined(FAF_POSIX)
+    // POSIX: Vulkan (on MoltenVK or KosmicKrisp) is the only renderer; the Direct3D
+    // backends are not built, so a Direct3D switch or graphics_api value is noted and the
+    // Vulkan renderer is tried alone.
+    static constexpr const char* kDirect3DSwitches[] = {"/D3D10", "/d3d9", "/d3d11", "/d3d12"};
+    for (const char* const name : kDirect3DSwitches) {
+      if (moho::CFG_GetArgOption(name, 0, nullptr)) {
+        gpg::Logf("renderer: %s ignored: this build has only the Vulkan renderer", name);
+      }
+    }
+    const msvc8::string posixOption = moho::OPTIONS_GetString("graphics_api");
+    gpg::Logf(
+      "graphics_api option: %s (this build has only the Vulkan renderer)",
+      posixOption.empty() ? "(unset)" : posixOption.c_str()
+    );
+    return {DeviceApi::Vulkan};
+#else
     const auto explicitApi = [](const DeviceApi api) {
       return (api == DeviceApi::Direct3D9) ? std::vector<DeviceApi>{api} : std::vector<DeviceApi>{api, DeviceApi::Direct3D9};
     };
@@ -1319,6 +1336,7 @@ namespace
 #else
     return {DeviceApi::Direct3D12, DeviceApi::Vulkan, DeviceApi::Direct3D11, DeviceApi::Direct3D9};
 #endif
+#endif // FAF_POSIX
   }
 
   /**
@@ -1534,11 +1552,20 @@ bool CScApp::CreateDevice()
     }
   }
   if (!created) {
+#if defined(FAF_POSIX)
+    // The binary's default-window retry, with the one renderer this build has.
+    moho::d3d_WindowsCursor = true;
+#else
     moho::d3d_WindowsCursor = useD3D10;
+#endif
   }
 
   if (!created) {
+#if defined(FAF_POSIX)
+    gpg::gal::DeviceContext fallbackContext(gpg::gal::DeviceApi::Vulkan);
+#else
     gpg::gal::DeviceContext fallbackContext(useD3D10 ? gpg::gal::DeviceApi::Direct3D10 : gpg::gal::DeviceApi::Direct3D9);
+#endif
     context = fallbackContext;
 
     gpg::gal::Head fallbackHead{};
@@ -1740,3 +1767,27 @@ bool CScApp::AppDoSuppressWindowsKeys() const
 
   return supcomFrame->IsApplicationActive();
 }
+
+#if defined(FAF_POSIX)
+// POSIX only: the headless replay runner's view of the file-local pieces above (CScApp.h).
+void moho::scapp::InitializeSessionFromCommandLine()
+{
+  ::InitializeSessionFromCommandLine();
+}
+
+float moho::scapp::TryReadFixedFrameDeltaSeconds()
+{
+  return ::TryReadFixedFrameDeltaSeconds();
+}
+
+int moho::scapp::GetFrameClockMode()
+{
+  return ::wld_FrameClock;
+}
+
+void moho::scapp::PublishFrameHeapStats()
+{
+  ::PublishAllocatorHeapStats();
+  ::UpdateAddressSpaceMonitor();
+}
+#endif

@@ -1399,10 +1399,25 @@ namespace moho
     // 0x008909DD-0x00890A2C: the name goes out as UTF-16 with its NUL, sized
     // `2 * length + 2` straight from the converted wide string.
     const std::wstring previewNameWide = gpg::STR_Utf8ToWide(mPreviewName.c_str());
+#if defined(FAF_POSIX)
+    // wchar_t is 32-bit here: emit the 16-bit units Windows writes (each unit's low
+    // 16 bits, which is what the Windows decoder keeps), so the loader above reads it.
+    std::u16string previewNameUtf16;
+    previewNameUtf16.reserve(previewNameWide.size() + 1U);
+    for (const wchar_t unit : previewNameWide) {
+      previewNameUtf16.push_back(static_cast<char16_t>(unit));
+    }
+    previewNameUtf16.push_back(u'\0');
+    writer.Write(
+      reinterpret_cast<const char*>(previewNameUtf16.data()),
+      previewNameUtf16.size() * sizeof(char16_t)
+    );
+#else
     writer.Write(
       reinterpret_cast<const char*>(previewNameWide.c_str()),
       (previewNameWide.size() + 1U) * sizeof(wchar_t)
     );
+#endif
 
     writer.Write(kPreviewMetadataEntryCount);
 

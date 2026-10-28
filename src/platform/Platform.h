@@ -41,8 +41,14 @@
 #error "winsock.h (v1) was included instead of winsock2.h. Fix your include order."
 #endif
 
+#if defined(FAF_POSIX)
+// LP64-15: a Windows `unsigned long` is 32 bits; read the low and high dword of the lane.
+#define LODWORD(x) (*reinterpret_cast<std::uint32_t*>(&(x)))
+#define HIDWORD(x) (*(reinterpret_cast<std::uint32_t*>(&(x)) + 1))
+#else
 #define LODWORD(x) (*reinterpret_cast<unsigned long*>(&(x)))
 #define HIDWORD(x) (*reinterpret_cast<unsigned long*>(&(x) + 1))
+#endif
 
 #ifdef CreateEvent
 #undef CreateEvent

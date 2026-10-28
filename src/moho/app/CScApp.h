@@ -172,3 +172,23 @@ static_assert(offsetof(CScApp, firstFramePending) == 0x54, "CScApp::firstFramePe
 static_assert(offsetof(CScApp, curTime) == 0x58, "CScApp::curTime offset must be 0x58");
 static_assert(offsetof(CScApp, framerates) == 0x60, "CScApp::framerates offset must be 0x60");
 static_assert(sizeof(CScApp) == 0x90, "CScApp size must be 0x90");
+
+#if defined(FAF_POSIX)
+// POSIX only: the pieces of CScApp.cpp that the headless replay runner
+// (src/platform/posix/runner) shares with CScApp, so it runs the same code rather than a
+// copy. They are file-local in CScApp.cpp; these forward to them unchanged.
+namespace moho::scapp
+{
+  // The first-frame command-line session start (`/replay`, `/con`, `/debug`, ...).
+  void InitializeSessionFromCommandLine();
+
+  // `/framerate N` as a fixed frame time in seconds, or -1 without it.
+  [[nodiscard]] float TryReadFixedFrameDeltaSeconds();
+
+  // The `wld_FrameClock` console variable (0 median, 1 mean, 2 own frame time).
+  [[nodiscard]] int GetFrameClockMode();
+
+  // The heap statistics CScApp::Main publishes each frame (and the address-space monitor).
+  void PublishFrameHeapStats();
+} // namespace moho::scapp
+#endif

@@ -1692,7 +1692,12 @@ namespace msvc8
         using const_iterator = const T*;
 
     private:
+#if defined(FAF_POSIX)
+        // clang outside the MSVC ABI spells it without the vendor prefix (same elision).
+        [[no_unique_address]] std::conditional_t<HasDebugProxy, void*, detail::NoDebugProxy> myProxy_;
+#else
         [[msvc::no_unique_address]] std::conditional_t<HasDebugProxy, void*, detail::NoDebugProxy> myProxy_; // +0x0 when present (opaque _Container_proxy*)
+#endif
         T* first_;      // +0x4 (+0x0 when HasDebugProxy=false)
         T* last_;       // +0x8 (+0x4 when HasDebugProxy=false)
         T* end_;        // +0xC (+0x8 when HasDebugProxy=false)

@@ -30,7 +30,23 @@ using namespace moho;
 
 namespace
 {
+#if defined(FAF_POSIX)
+  // Never destroyed. DISK_ResetWatch is an atexit handler registered during static
+  // initialization (before this file's statics), so it runs after the C++ library has
+  // destroyed this file's objects; libc++'s lock of a destroyed mutex throws ("mutex lock
+  // failed") and exit() aborts. The MSVC CRT's mutex tolerates it. Constant-initialized,
+  // so it is usable before this file's initializers run, as the plain object is.
+  union NeverDestroyedMutex
+  {
+    constexpr NeverDestroyedMutex() : mutex() {}
+    ~NeverDestroyedMutex() {}
+    std::mutex mutex;
+  };
+  constinit NeverDestroyedMutex gDiskWatchInitMutexStorage;
+  constinit std::mutex& gDiskWatchInitMutex = gDiskWatchInitMutexStorage.mutex;
+#else
   std::mutex gDiskWatchInitMutex;
+#endif
   CDiskWatch* gDiskWatch = nullptr;
   constexpr std::uint8_t kWatchMapColorRed = 0u;
   constexpr std::uint8_t kWatchMapColorBlack = 1u;

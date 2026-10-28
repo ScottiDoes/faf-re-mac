@@ -69,6 +69,20 @@ namespace msvc8
      * `hash_value` end in this step over their hash; integral keys reach it
      * through `hash_compare` after the `_HASH_SEED` XOR.
      */
+#if defined(FAF_POSIX)
+    // LP64 (README rule 2): VC8 runs this on a 32-bit `long`, and callers narrow their keys
+    // to it (`static_cast<long>(key ^ _HASH_SEED)` wraps on Windows). With a 64-bit long the
+    // keys would not wrap and every hash, so bucket and iteration order, would differ.
+    [[nodiscard]] inline std::size_t hash_value(const std::int32_t key) noexcept
+    {
+        const std::div_t parts = std::div(key, 127773);
+        std::int32_t scrambled = 16807 * parts.rem - 2836 * parts.quot;
+        if (scrambled < 0) {
+            scrambled += 2147483647;
+        }
+        return static_cast<std::size_t>(scrambled);
+    }
+#else
     [[nodiscard]] inline std::size_t hash_value(long key) noexcept
     {
         const std::ldiv_t parts = std::ldiv(key, 127773L);
@@ -78,6 +92,7 @@ namespace msvc8
         }
         return static_cast<std::size_t>(scrambled);
     }
+#endif
 
     /** VC8's `_HASH_SEED`. */
     inline constexpr std::size_t hash_seed = 0xDEADBEEFu;

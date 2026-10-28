@@ -15,7 +15,12 @@
 #include <windows.h>
 #include <mmreg.h>
 #include <mmsystem.h>
+#if defined(FAF_POSIX)
+// DirectSound is Windows-only: the stand-in's DirectSoundCreate reports no device.
+#include "platform/posix/stubs/audio-movie/include/dsound.h"
+#else
 #include <dsound.h>
+#endif
 #include <boost/ptr_container/exception.hpp>
 
 #include "gpg/core/algorithms/MD5.h"
@@ -1262,6 +1267,16 @@ namespace moho
    */
   int func_CreateXACTinstance(const std::uint32_t mode, void** const outEngine)
   {
+#if defined(FAF_POSIX)
+    // No XACT COM server exists on POSIX: what CoCreateInstance returns on a Windows
+    // machine without it (REGDB_E_CLASSNOTREG). Unreached, as func_InitSound runs the
+    // POSIX build without sound; kept so the caller's error path stays intact.
+    (void)mode;
+    if (outEngine != nullptr) {
+      *outEngine = nullptr;
+    }
+    return static_cast<int>(0x80040154u);
+#else
     std::uint32_t debug = (mode >> 1u) & 1u;
     const std::uint32_t audition = mode & 1u;
     const std::uint32_t auditionMode = audition;
@@ -1302,6 +1317,7 @@ namespace moho
       result = CoCreateInstance(kXactComInterfaceClsid, nullptr, CLSCTX_INPROC_SERVER, kXactComInterfaceRiid, outEngine);
     }
     return result;
+#endif
   }
 
   void func_RetreiveXACTCOMInterface(AudioEngineImpl* impl);
@@ -1825,6 +1841,16 @@ namespace moho
     sSoundConfiguration->mNoSound = static_cast<std::uint8_t>(
       moho::CFG_GetArgOption("/nosound", 0u, nullptr) ? 1u : 0u
     );
+#if defined(FAF_POSIX)
+    // The POSIX build has no XACT runtime yet (milestone 3: FAudio), so it always runs
+    // as with /nosound (which the Windows replay-parity runs also pass): engines come
+    // up without an XACT instance. CSimSoundManager, its requests and their
+    // serialization never consult the audio engine.
+    if (sSoundConfiguration->mNoSound == 0u) {
+      FAF_POSIX_STUB("SND: no XACT runtime on this platform; running as with /nosound");
+      sSoundConfiguration->mNoSound = 1u;
+    }
+#endif
 
     if (sSoundConfiguration->mNoSound == 0u) {
       sSoundConfiguration->mRuntimeParams.lookAheadTime = 250u;

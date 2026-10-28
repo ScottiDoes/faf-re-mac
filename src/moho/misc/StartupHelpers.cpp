@@ -35,8 +35,10 @@
 
 #include "gpg/core/utils/Global.h"
 #include "gpg/core/utils/Logging.h"
+#if !defined(FAF_POSIX)
 #include "gpg/gal/backends/d3d10/DeviceD3D10.hpp"
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
+#endif
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/DeviceContext.hpp"
 #include "gpg/gal/Error.hpp"
@@ -5182,6 +5184,27 @@ msvc8::string moho::USER_GetAppLocalDataDir()
   return outDir;
 }
 
+#if defined(FAF_POSIX)
+namespace
+{
+  // The engine's paths are Windows-form ("C:\Users\...", from SHGetFolderPath and friends),
+  // which the compat file layer maps to the host filesystem. std::ofstream and
+  // std::filesystem do not go through that layer, and on POSIX would create a file or
+  // directory literally named "C:\Users\..." in the current directory.
+  [[nodiscard]] std::string HostPathForStdLib(const wchar_t* const windowsPath)
+  {
+    const std::size_t needed = ::faf_posixHostPathW(windowsPath, nullptr, 0u);
+    if (needed == 0u) {
+      return std::string();
+    }
+    std::string hostPath(needed, '\0');
+    const std::size_t length = ::faf_posixHostPathW(windowsPath, hostPath.data(), hostPath.size());
+    hostPath.resize(length < needed ? length : 0u);
+    return hostPath;
+  }
+} // namespace
+#endif
+
 /**
  * Address: 0x008C9F90 (FUN_008C9F90)
  *
@@ -5212,7 +5235,13 @@ msvc8::string moho::USER_GetAppCacheDir()
   }
 
   std::error_code createDirectoryError;
+#if defined(FAF_POSIX)
+  std::filesystem::create_directories(
+    std::filesystem::path(HostPathForStdLib(cachePath.wstring().c_str())), createDirectoryError
+  );
+#else
   std::filesystem::create_directories(cachePath, createDirectoryError);
+#endif
 
   outDir.assign_owned(cachePath.generic_string());
   return outDir;
@@ -6133,7 +6162,13 @@ void moho::USER_SavePreferences()
   const std::wstring preferencesPathWide = gpg::STR_Utf8ToWide(preferencesPathText != nullptr ? preferencesPathText : "");
   const std::wstring temporaryPathWide = preferencesPathWide + L".new";
 
+#if defined(FAF_POSIX)
+  // libc++ has no std::ofstream(const wchar_t*) (an MSVC extension): open by the host path.
+  const std::string temporaryHostPath = HostPathForStdLib(temporaryPathWide.c_str());
+  std::ofstream outputStream(temporaryHostPath.c_str());
+#else
   std::ofstream outputStream(temporaryPathWide.c_str());
+#endif
   if (!outputStream.is_open()) {
     const std::wstring warningWide = std::wstring(L"Unable to open preference file: ") + temporaryPathWide;
     const msvc8::string warningUtf8 = gpg::STR_WideToUtf8(warningWide.c_str());

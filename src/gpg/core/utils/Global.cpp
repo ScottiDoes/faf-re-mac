@@ -305,7 +305,7 @@ namespace
         return node;
     }
 
-#if defined(_M_X64)
+#if defined(_M_X64) || defined(FAF_POSIX)
     // x64 always allocates from a system heap. The engine allocator is the x86
     // binary's: its smallest size classes (4..28 bytes, step 4) cannot hold the
     // 8-byte free-list link a freed block carries, nor give the 16-byte
@@ -339,6 +339,9 @@ namespace
         return written == 1u && value[0] == '1';
     }
 
+#if !defined(FAF_POSIX)
+    // POSIX: no PE image, and arm64 macOS keeps the low 4 GB unmapped (__PAGEZERO) for
+    // every process, which is what FAF_HIGHMEM arranges on Windows.
     [[nodiscard]] bool ImageIsLargeAddressAware() noexcept
     {
         const HMODULE image = ::GetModuleHandleW(nullptr);
@@ -391,6 +394,7 @@ namespace
         gHighMemoryReservation.engineHeap = ::HeapCreate(0, 0, 0);
         gHighMemoryReservation.active = true;
     }
+#endif // !FAF_POSIX
 
     /// The heap the x64 allocator path draws from: the FAF_HIGHMEM private heap
     /// when that mode is active, the process heap otherwise.
@@ -1710,6 +1714,7 @@ namespace
  * Registering the real callback fixes both: the reason code is whatever Windows
  * passes, and every thread exit runs it.
  */
+#if !defined(FAF_POSIX) // POSIX: the x64 path's thread_local exit guards do this work
 #if defined(_M_IX86)
 #pragma comment(linker, "/INCLUDE:__tls_used")
 #pragma comment(linker, "/INCLUDE:_gAllocatorTlsCallbackEntry")
@@ -1720,6 +1725,7 @@ namespace
 #pragma const_seg(".CRT$XLB")
 extern "C" const PIMAGE_TLS_CALLBACK gAllocatorTlsCallbackEntry = &TlsCallback_1;
 #pragma const_seg()
+#endif // !FAF_POSIX
 
 #if defined(_M_X64)
 void gpg::LogHighMemoryReservation()
@@ -1847,7 +1853,7 @@ extern "C" void* __cdecl malloc_crt(size_t size)
  */
 extern "C" void* __cdecl malloc_0(const std::uint32_t size)
 {
-#if defined(_M_X64)
+#if defined(_M_X64) || defined(FAF_POSIX)
     void* block = (size <= small_pool::kMaxPooledBytes && small_pool::Enabled()) ? small_pool::Allocate(size) : nullptr;
     if (block == nullptr) {
         block = SystemHeapAlloc(size); // larger blocks, no pool, or the pool's range is used up
@@ -1958,7 +1964,7 @@ extern "C" void __cdecl free_0(void* ptr)
     }
 #endif
 
-#if defined(_M_X64)
+#if defined(_M_X64) || defined(FAF_POSIX)
     // This has to come before `GetPageOwner`, which is only meaningful for
     // pages the engine allocator owns.
     if (gMemHook != nullptr) {
@@ -2029,7 +2035,7 @@ extern "C" size_t __cdecl msize(void* memblock)
         return 0;
     }
 
-#if defined(_M_X64)
+#if defined(_M_X64) || defined(FAF_POSIX)
     // `realloc_0` sizes its copy from this, so it has to answer for system-heap
     // blocks; `HeapSize` reports `(SIZE_T)-1` for a pointer it does not own.
     if (small_pool::Owns(memblock)) {
@@ -2272,7 +2278,7 @@ void gpg::GetHeapInfo(HeapStats* const outStats)
         return;
     }
 
-#if defined(_M_X64)
+#if defined(_M_X64) || defined(FAF_POSIX)
     // On the x64 system heap the engine allocator never starts, and must not
     // be started here just to read its (empty) counters.
     FillSystemHeapStats(*outStats);

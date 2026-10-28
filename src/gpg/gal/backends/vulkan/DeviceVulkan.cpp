@@ -10,8 +10,15 @@
 #include <string>
 #include <vector>
 
+#if !defined(FAF_POSIX)
 #include <d3dcompiler.h>
 #include <wrl/client.h>
+#else
+#include <utility>
+
+#include "gpg/gal/Error.hpp"
+#include "platform/posix/gal/HlslPreprocess.h"
+#endif
 
 #include "VulkanSurface.h"
 #include "gpg/core/utils/Logging.h"
@@ -95,6 +102,14 @@ namespace gpg::gal
       return commandLine.find(needle) != std::string::npos;
     }
 
+#if defined(FAF_POSIX)
+    [[nodiscard]] long EnvironmentNumber(const char* const name, const long fallback)
+    {
+      const char* const value = std::getenv(name);
+      return (value != nullptr && value[0] != '\0') ? std::strtol(value, nullptr, 10) : fallback;
+    }
+
+#endif
     [[nodiscard]] bool IsRgbaTexture(Texture& texture)
     {
       const DXGI_FORMAT format = static_cast<TextureVulkan&>(texture).DxgiFormat();
@@ -382,7 +397,28 @@ namespace gpg::gal
 
     std::vector<const char*> extensions{VK_KHR_SURFACE_EXTENSION_NAME, vulkan::PlatformSurfaceExtension()};
     std::vector<const char*> layers;
+#if defined(FAF_POSIX)
+    // MoltenVK is a portability driver: the loader lists it only to an instance that
+    // enumerates portability devices.
+    VkInstanceCreateFlags instanceFlags = 0U;
+    {
+      std::uint32_t count = 0U;
+      Vk().vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+      std::vector<VkExtensionProperties> available(count);
+      Vk().vkEnumerateInstanceExtensionProperties(nullptr, &count, available.data());
+      for (const VkExtensionProperties& extension : available) {
+        if (std::strcmp(extension.extensionName, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0) {
+          extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+          instanceFlags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        }
+      }
+    }
+    // FAF_VULKAN_VALIDATION=1 as well as /vulkandebug (the loader finds the SDK's layer
+    // through VK_ADD_LAYER_PATH, VulkanLoader.cpp).
+    const bool debug = CommandLineHas("/vulkandebug") || vulkan::EnvironmentFlag("FAF_VULKAN_VALIDATION");
+#else
     const bool debug = CommandLineHas("/vulkandebug");
+#endif
     if (debug) {
       std::uint32_t count = 0U;
       Vk().vkEnumerateInstanceLayerProperties(&count, nullptr);
@@ -411,6 +447,9 @@ namespace gpg::gal
     info.ppEnabledExtensionNames = extensions.data();
     info.enabledLayerCount = static_cast<std::uint32_t>(layers.size());
     info.ppEnabledLayerNames = layers.data();
+#if defined(FAF_POSIX)
+    info.flags = instanceFlags;
+#endif
     CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateInstance(&info, nullptr, &mInstance));
     if (!Vk().LoadInstance(mInstance)) {
       ThrowError("DeviceVulkan.cpp", __LINE__, "the Vulkan instance lacks required functions");
@@ -538,6 +577,85 @@ namespace gpg::gal
     if (available.features.textureCompressionBC != VK_TRUE) {
       ThrowError("DeviceVulkan.cpp", __LINE__, "the Vulkan device has no BC texture compression");
     }
+#if defined(FAF_POSIX)
+    // VK_KHR_portability_subset (MoltenVK): a device that offers it must have it enabled,
+    // and what it leaves out must not be used. All the device has goes on (chained below).
+    // The backend draws no triangle fans or point polygons, sets no events, uses no
+    // constant-alpha blend factors, comparison samplers, reinterpreting views or
+    // tessellation, and gives both stencil faces the same masks and reference; it does
+    // rely on view swizzles (A8, X8 formats), on attributes reaching past their binding's
+    // stride (the zero-stride binding of the inputs a vertex format lacks) and, for
+    // effects that ask for one, on a sampler LOD bias.
+    VkPhysicalDevicePortabilitySubsetFeaturesKHR subset{};
+    subset.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR;
+    std::vector<const char*> deviceExtensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    {
+      std::uint32_t count = 0U;
+      Vk().vkEnumerateDeviceExtensionProperties(mPhysical, nullptr, &count, nullptr);
+      std::vector<VkExtensionProperties> offered(count);
+      Vk().vkEnumerateDeviceExtensionProperties(mPhysical, nullptr, &count, offered.data());
+      mPortabilitySubset = std::any_of(offered.begin(), offered.end(), [](const VkExtensionProperties& extension) {
+        return std::strcmp(extension.extensionName, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) == 0;
+      });
+    }
+    if (mPortabilitySubset) {
+      VkPhysicalDeviceFeatures2 query{};
+      query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+      query.pNext = &subset;
+      Vk().vkGetPhysicalDeviceFeatures2(mPhysical, &query);
+      subset.pNext = nullptr;
+      deviceExtensions.push_back(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+      mSamplerLodBias = subset.samplerMipLodBias == VK_TRUE;
+      if (subset.imageViewFormatSwizzle != VK_TRUE) {
+        gpg::Warnf("Vulkan: the device has no view swizzles (portability subset): A8 and X8 textures read the wrong channels");
+      }
+      if (subset.vertexAttributeAccessBeyondStride != VK_TRUE) {
+        gpg::Warnf("Vulkan: vertex attributes cannot reach past their stride (portability subset): inputs a format lacks are undefined");
+      }
+      gpg::Logf(
+        "Vulkan: portability subset (sampler LOD bias %s, view swizzle %s, attributes past the stride %s, triangle fans %s)",
+        mSamplerLodBias ? "yes" : "no (biases dropped)", (subset.imageViewFormatSwizzle == VK_TRUE) ? "yes" : "no",
+        (subset.vertexAttributeAccessBeyondStride == VK_TRUE) ? "yes" : "no", (subset.triangleFans == VK_TRUE) ? "yes" : "no (unused)"
+      );
+    }
+    // Set 0 has kTextureBindings sampled images and kSamplerBindings samplers for both
+    // stages (terrain.fx alone declares 19 samplers). MoltenVK allows 16 samplers per
+    // stage in an ordinary set and 1024 in an update-after-bind one (Metal argument
+    // buffers either way): when the ordinary limits are short and the update-after-bind
+    // ones are not, set 0 becomes an update-after-bind layout (nothing is updated after
+    // binding; only the limits differ).
+    {
+      VkPhysicalDeviceVulkan12Properties properties12{};
+      properties12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
+      VkPhysicalDeviceProperties2 query{};
+      query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+      query.pNext = &properties12;
+      Vk().vkGetPhysicalDeviceProperties2(mPhysical, &query);
+      const VkPhysicalDeviceLimits& limits = mProperties.limits;
+      const std::uint32_t resources = kTextureBindings + kSamplerBindings + 1U; // + $Globals
+      const bool ordinary = limits.maxPerStageDescriptorSamplers >= kSamplerBindings &&
+        limits.maxPerStageDescriptorSampledImages >= kTextureBindings && limits.maxPerStageResources >= resources &&
+        limits.maxDescriptorSetSamplers >= kSamplerBindings && limits.maxDescriptorSetSampledImages >= kTextureBindings;
+      const bool updateAfterBind = available12.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE &&
+        properties12.maxPerStageDescriptorUpdateAfterBindSamplers >= kSamplerBindings &&
+        properties12.maxPerStageDescriptorUpdateAfterBindSampledImages >= kTextureBindings &&
+        properties12.maxPerStageUpdateAfterBindResources >= resources &&
+        properties12.maxDescriptorSetUpdateAfterBindSamplers >= kSamplerBindings &&
+        properties12.maxDescriptorSetUpdateAfterBindSampledImages >= kTextureBindings;
+      mTextureSetUpdateAfterBind = !ordinary && updateAfterBind;
+      if (mTextureSetUpdateAfterBind) {
+        gpg::Logf(
+          "Vulkan: texture set update-after-bind (%u samplers per stage; an ordinary set allows %u, an update-after-bind one %u)",
+          kSamplerBindings, limits.maxPerStageDescriptorSamplers, properties12.maxPerStageDescriptorUpdateAfterBindSamplers
+        );
+      } else if (!ordinary) {
+        gpg::Warnf(
+          "Vulkan: the texture set (%u samplers, %u images per stage) exceeds the device's limits (%u samplers, %u images)",
+          kSamplerBindings, kTextureBindings, limits.maxPerStageDescriptorSamplers, limits.maxPerStageDescriptorSampledImages
+        );
+      }
+    }
+#endif
 
     const float priority = 1.0f;
     VkDeviceQueueCreateInfo queue{};
@@ -562,6 +680,15 @@ namespace gpg::gal
     info.pQueueCreateInfos = &queue;
     info.enabledExtensionCount = mMemoryBudget ? 2U : 1U;
     info.ppEnabledExtensionNames = extensions;
+#if defined(FAF_POSIX)
+    if (mMemoryBudget) {
+      deviceExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    }
+    info.enabledExtensionCount = static_cast<std::uint32_t>(deviceExtensions.size());
+    info.ppEnabledExtensionNames = deviceExtensions.data();
+    features13.pNext = mPortabilitySubset ? &subset : nullptr;
+    features12.descriptorBindingSampledImageUpdateAfterBind = mTextureSetUpdateAfterBind ? VK_TRUE : VK_FALSE;
+#endif
     CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateDevice(mPhysical, &info, nullptr, &mDevice));
     if (!Vk().LoadDevice(mDevice)) {
       ThrowError("DeviceVulkan.cpp", __LINE__, "the Vulkan device lacks required functions");
@@ -621,7 +748,23 @@ namespace gpg::gal
     layout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layout.bindingCount = static_cast<std::uint32_t>(bindings.size());
     layout.pBindings = bindings.data();
+#if defined(FAF_POSIX)
+    // See CreateLogicalDevice: an update-after-bind layout where the ordinary limits are too small.
+    const std::vector<VkDescriptorBindingFlags> bindingFlags(bindings.size(), VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
+    VkDescriptorSetLayoutBindingFlagsCreateInfo flags{};
+    flags.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    flags.bindingCount = static_cast<std::uint32_t>(bindingFlags.size());
+    flags.pBindingFlags = bindingFlags.data();
+    if (mTextureSetUpdateAfterBind) {
+      layout.pNext = &flags;
+      layout.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+    }
+#endif
     CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateDescriptorSetLayout(mDevice, &layout, nullptr, &mTextureLayout));
+#if defined(FAF_POSIX)
+    layout.pNext = nullptr;
+    layout.flags = 0U;
+#endif
 
     VkDescriptorSetLayoutBinding constants{};
     constants.binding = 0U;
@@ -719,9 +862,20 @@ namespace gpg::gal
     }
 
     VkExtent2D extent{width, height};
+#if defined(FAF_POSIX)
+    // The size the engine asked for (its head, in drawable pixels), as Direct3D sizes a
+    // back buffer: the Apple drivers take any extent (MoltenVK sets the layer's
+    // drawableSize to it), so a WM_SIZE that reaches the engine before the layer has its
+    // new bounds still gets the size the engine lays its frame out for. The layer's own
+    // size (currentExtent) only when the engine has none.
+    if ((width == 0U || height == 0U) && capabilities.currentExtent.width != 0xFFFFFFFFU) {
+      extent = capabilities.currentExtent;
+    }
+#else
     if (capabilities.currentExtent.width != 0xFFFFFFFFU) {
       extent = capabilities.currentExtent;
     }
+#endif
     extent.width = std::clamp(extent.width, capabilities.minImageExtent.width, std::max(capabilities.maxImageExtent.width, 1U));
     extent.height = std::clamp(extent.height, capabilities.minImageExtent.height, std::max(capabilities.maxImageExtent.height, 1U));
 
@@ -744,6 +898,27 @@ namespace gpg::gal
     info.presentMode = mode;
     info.clipped = VK_TRUE;
     info.oldSwapchain = swapChain.swapchain;
+#if defined(FAF_POSIX)
+    // Only usages and an alpha mode the surface offers (both Apple drivers offer these;
+    // a back buffer that cannot be sampled or copied only loses those uses).
+    if ((capabilities.supportedUsageFlags & info.imageUsage) != info.imageUsage) {
+      gpg::Warnf("Vulkan: the surface's images lack usages 0x%X", info.imageUsage & ~capabilities.supportedUsageFlags);
+      info.imageUsage &= capabilities.supportedUsageFlags | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    }
+    if ((capabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) == 0U && capabilities.supportedCompositeAlpha != 0U) {
+      info.compositeAlpha = static_cast<VkCompositeAlphaFlagBitsKHR>(
+        capabilities.supportedCompositeAlpha & ~(capabilities.supportedCompositeAlpha - 1U)
+      );
+    }
+    swapChain.suboptimalNoted = false;
+    if (capabilities.currentExtent.width != 0xFFFFFFFFU &&
+        (capabilities.currentExtent.width != extent.width || capabilities.currentExtent.height != extent.height)) {
+      gpg::Logf(
+        "Vulkan: swap chain %ux%u for a %ux%u layer (the engine's size; the layer follows)", extent.width, extent.height,
+        capabilities.currentExtent.width, capabilities.currentExtent.height
+      );
+    }
+#endif
     VkSwapchainKHR created = VK_NULL_HANDLE;
     CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateSwapchainKHR(mDevice, &info, nullptr, &created));
     if (swapChain.swapchain != VK_NULL_HANDLE) {
@@ -794,6 +969,10 @@ namespace gpg::gal
   {
     for (int headIndex = 0; headIndex < context.GetHeadCount(); ++headIndex) {
       const Head& head = context.GetHead(static_cast<std::uint32_t>(headIndex));
+#if defined(FAF_POSIX)
+      const VkExtent2D requested = RequestedExtent(head);
+      CreateSwapChain(mSwapChains[static_cast<std::size_t>(headIndex)], requested.width, requested.height);
+#else
       std::uint32_t width = head.mWidth;
       std::uint32_t height = head.mHeight;
       if (width == 0U || height == 0U) {
@@ -803,6 +982,7 @@ namespace gpg::gal
         height = static_cast<std::uint32_t>(std::max<LONG>(client.bottom - client.top, 1));
       }
       CreateSwapChain(mSwapChains[static_cast<std::size_t>(headIndex)], width, height);
+#endif
     }
     VkSemaphoreCreateInfo semaphore{};
     semaphore.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -844,6 +1024,11 @@ namespace gpg::gal
       output.surface.reset(target);
       const DepthStencilTargetContext depthContext(swapChain.extent.width, swapChain.extent.height, 3U, false);
       output.depthStencil = CreateDepthStencilTarget(&depthContext);
+#if defined(FAF_POSIX)
+      if (!swapChain.hasImage) {
+        EnsureStandIn(headIndex);
+      }
+#endif
       gpg::Logf("Vulkan: head %u back buffer target %p (%ux%u)", static_cast<unsigned>(headIndex), target, swapChain.extent.width,
                 swapChain.extent.height);
     }
@@ -858,6 +1043,119 @@ namespace gpg::gal
     }
   }
 
+#if defined(FAF_POSIX)
+  VkExtent2D DeviceVulkan::RequestedExtent(const Head& head) const
+  {
+    if (head.mWidth != 0U && head.mHeight != 0U) {
+      return VkExtent2D{head.mWidth, head.mHeight};
+    }
+    RECT client{};
+    if (head.mWindow != nullptr && ::GetClientRect(static_cast<HWND>(head.mWindow), &client) != FALSE && client.right > client.left &&
+        client.bottom > client.top) {
+      return VkExtent2D{static_cast<std::uint32_t>(client.right - client.left), static_cast<std::uint32_t>(client.bottom - client.top)};
+    }
+    return VkExtent2D{0U, 0U}; // CreateSwapChain takes the layer's size
+  }
+
+  void DeviceVulkan::EnsureStandIn(const std::size_t headIndex)
+  {
+    // Frames whose swap-chain image could not be acquired draw here instead of into an
+    // image the presentation engine may own, and are not presented (AcquiredImage).
+    if (headIndex >= mHeadOutputContexts.size() || mHeadOutputContexts[headIndex].surface == nullptr) {
+      return;
+    }
+    auto* const target = static_cast<RenderTargetVulkan*>(mHeadOutputContexts[headIndex].surface.get());
+    std::vector<RenderTargetVulkan::Buffer>& buffers = target->Buffers();
+    if (buffers.empty() || buffers.back().image.owned) {
+      return;
+    }
+    const vulkan::TrackedImage& model = buffers.front().image;
+    RenderTargetVulkan::Buffer standIn;
+    VkImageCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    info.imageType = VK_IMAGE_TYPE_2D;
+    info.format = model.format;
+    info.extent = {model.width, model.height, 1U};
+    info.mipLevels = 1U;
+    info.arrayLayers = 1U;
+    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+      VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateImage(mDevice, &info, nullptr, &standIn.image.image));
+    VkMemoryRequirements requirements{};
+    Vk().vkGetImageMemoryRequirements(mDevice, standIn.image.image, &requirements);
+    standIn.image.memory = mMemory.Allocate(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false);
+    CheckVk(
+      "DeviceVulkan.cpp", __LINE__,
+      Vk().vkBindImageMemory(mDevice, standIn.image.image, standIn.image.memory.memory, standIn.image.memory.offset)
+    );
+    standIn.image.format = model.format;
+    standIn.image.width = model.width;
+    standIn.image.height = model.height;
+    VkImageViewCreateInfo view{};
+    view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view.image = standIn.image.image;
+    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view.format = model.format;
+    view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0U, 1U, 0U, 1U};
+    CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateImageView(mDevice, &view, nullptr, &standIn.view));
+    buffers.push_back(standIn);
+    gpg::Logf("Vulkan: head %u draws into a stand-in while it has no swap-chain image", static_cast<unsigned>(headIndex));
+  }
+
+  bool DeviceVulkan::RebuildSwapChain(const std::size_t headIndex)
+  {
+    SwapChain& swapChain = mSwapChains[headIndex];
+    // The old images go with the old swap chain: the GPU must be done with them. Nothing
+    // of the next frame is recorded yet (AcquireNextImages runs between frames).
+    Vk().vkDeviceWaitIdle(mDevice);
+    try {
+      CreateSwapChain(swapChain, swapChain.extent.width, swapChain.extent.height);
+    } catch (const Error& error) {
+      gpg::Warnf("Vulkan: rebuilding head %u's swap chain failed: %s", static_cast<unsigned>(headIndex), error.what());
+      return false;
+    }
+    swapChain.outOfDate = false;
+    gpg::Logf("Vulkan: head %u's swap chain was out of date and is rebuilt (%ux%u)", static_cast<unsigned>(headIndex),
+              swapChain.extent.width, swapChain.extent.height);
+    if (headIndex >= mHeadOutputContexts.size() || mHeadOutputContexts[headIndex].surface == nullptr) {
+      return true;
+    }
+    // The engine keeps its back-buffer target: its buffers take the new images (same
+    // size and format), the stand-in stays last.
+    auto* const target = static_cast<RenderTargetVulkan*>(mHeadOutputContexts[headIndex].surface.get());
+    std::vector<RenderTargetVulkan::Buffer>& buffers = target->Buffers();
+    std::vector<RenderTargetVulkan::Buffer> rebuilt;
+    for (const VkImage image : swapChain.images) {
+      RenderTargetVulkan::Buffer buffer;
+      buffer.image.image = image;
+      buffer.image.owned = false;
+      buffer.image.format = swapChain.format;
+      buffer.image.width = swapChain.extent.width;
+      buffer.image.height = swapChain.extent.height;
+      buffer.image.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+      VkImageViewCreateInfo view{};
+      view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+      view.image = image;
+      view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+      view.format = swapChain.format;
+      view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0U, 1U, 0U, 1U};
+      CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateImageView(mDevice, &view, nullptr, &buffer.view));
+      rebuilt.push_back(buffer);
+    }
+    for (RenderTargetVulkan::Buffer& buffer : buffers) {
+      if (buffer.image.owned) {
+        rebuilt.push_back(buffer);
+      } else {
+        Retire(buffer.image, buffer.view); // the view; the old swap chain took its image
+      }
+    }
+    buffers = std::move(rebuilt);
+    return true;
+  }
+
+#endif
   void DeviceVulkan::ReleaseRenderTargets() noexcept
   {
     outputContext_ = OutputContext();
@@ -951,11 +1249,20 @@ namespace gpg::gal
     ResetState();
     CheckAvailableFormats(context);
     CreateRenderTargets();
+#if defined(FAF_POSIX)
+    gpg::Logf(
+      "Vulkan: ready (%d head(s) on %s, driver %s, loader %s; effects through the FAF effect layer, %s SPIR-V, shader cache %s, "
+      "vsync %s)",
+      mDeviceContext.GetHeadCount(), mProperties.deviceName, mDriverName.c_str(), vulkan::LoaderPath(), compiler.Version().c_str(),
+      effects::ShaderCacheDirectory().empty() ? "off" : effects::ShaderCacheDirectory().c_str(), mDeviceContext.mVSync ? "on" : "off"
+    );
+#else
     gpg::Logf(
       "Vulkan: ready (%d head(s), effects through the FAF effect layer, %s SPIR-V, shader cache %s, vsync %s)",
       mDeviceContext.GetHeadCount(), compiler.Version().c_str(),
       effects::ShaderCacheDirectory().empty() ? "off" : effects::ShaderCacheDirectory().c_str(), mDeviceContext.mVSync ? "on" : "off"
     );
+#endif
     // ren_Info's facts, logged once here until the console command lands.
     DeviceRuntimeInfo runtimeInfo;
     if (GetRuntimeInfo(runtimeInfo)) {
@@ -1159,6 +1466,34 @@ namespace gpg::gal
       if (swapChain.swapchain == VK_NULL_HANDLE) {
         continue;
       }
+#if defined(FAF_POSIX)
+      // Out of date (a present said so, or this acquire does): rebuilt at the size the
+      // engine knows, then acquired again. A window resize or a Retina scale change
+      // only makes the Apple drivers' swap chains suboptimal (Present) until the
+      // engine's WM_SIZE resets the device at the new size.
+      // FAF_VULKAN_TEST_NO_IMAGE=<frame>: the acquire after that frame fails (Present).
+      static const long testNoImage = EnvironmentNumber("FAF_VULKAN_TEST_NO_IMAGE", -1L);
+      std::uint32_t acquired = 0U;
+      VkResult result = swapChain.outOfDate
+        ? VK_ERROR_OUT_OF_DATE_KHR
+        : (static_cast<long>(mFrameNumber) == testNoImage)
+        ? VK_NOT_READY
+        : Vk().vkAcquireNextImageKHR(mDevice, swapChain.swapchain, ~0ULL, frame.acquire[index], VK_NULL_HANDLE, &acquired);
+      if (result == VK_ERROR_OUT_OF_DATE_KHR && RebuildSwapChain(index)) {
+        result = Vk().vkAcquireNextImageKHR(mDevice, swapChain.swapchain, ~0ULL, frame.acquire[index], VK_NULL_HANDLE, &acquired);
+      }
+      if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
+        swapChain.acquired = acquired;
+        swapChain.hasImage = true;
+        swapChain.acquireWaitPending = true;
+      } else {
+        static int logged = 0;
+        if (logged++ < 8) {
+          gpg::Warnf("Vulkan: acquiring head %u's image failed (%s)", static_cast<unsigned>(index), vulkan::ResultName(result));
+        }
+        EnsureStandIn(index);
+      }
+#else
       const VkResult result =
         Vk().vkAcquireNextImageKHR(mDevice, swapChain.swapchain, ~0ULL, frame.acquire[index], VK_NULL_HANDLE, &swapChain.acquired);
       if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
@@ -1167,11 +1502,19 @@ namespace gpg::gal
       } else {
         gpg::Warnf("Vulkan: acquiring head %u's image failed (%s)", static_cast<unsigned>(index), vulkan::ResultName(result));
       }
+#endif
     }
   }
 
   std::uint32_t DeviceVulkan::AcquiredImage(const std::uint32_t swapChain)
   {
+#if defined(FAF_POSIX)
+    // Without an acquired image a head draws into its stand-in, the buffer after the
+    // swap chain's images (EnsureStandIn), and is not presented.
+    if (swapChain < mSwapChains.size() && !mSwapChains[swapChain].hasImage) {
+      return static_cast<std::uint32_t>(mSwapChains[swapChain].images.size());
+    }
+#endif
     return (swapChain < mSwapChains.size()) ? mSwapChains[swapChain].acquired : 0U;
   }
 
@@ -1543,6 +1886,25 @@ namespace gpg::gal
     for (const MacroPair& macro : kInjectedMacros) {
       localContext.DefineMacro(macro.name, macro.value);
     }
+#if defined(FAF_POSIX)
+    // D3DPreprocess (d3dcompiler_47) is Windows-only; platform/posix/gal/HlslPreprocess.h
+    // does its job, with the same macros and no include handler.
+    std::vector<std::pair<std::string, std::string>> defines;
+    for (const EffectMacro& macro : localContext.mMacros) {
+      defines.emplace_back(macro.keyText_.c_str(), macro.valueText_.c_str());
+    }
+
+    const DWORD started = ::GetTickCount();
+    const char* const sourceName = context.mSourcePath.c_str();
+    const std::size_t sourceBytes = static_cast<std::size_t>(context.mSourceBuffer.mEnd - context.mSourceBuffer.mBegin);
+    const faf_posix::gal::PreprocessedEffect preprocessed =
+      faf_posix::gal::PreprocessEffect(std::string_view(context.mSourceBuffer.mBegin, sourceBytes), sourceName, defines);
+    if (!preprocessed.succeeded) {
+      const std::string message = std::string("unable to preprocess effect: ") + sourceName + " reason: " + preprocessed.errors;
+      ThrowError("DeviceVulkan.cpp", __LINE__, message.c_str());
+    }
+    const std::string_view preprocessedText(preprocessed.text);
+#else
     std::vector<D3D_SHADER_MACRO> defines;
     for (const EffectMacro& macro : localContext.mMacros) {
       defines.push_back(D3D_SHADER_MACRO{macro.keyText_.c_str(), macro.valueText_.c_str()});
@@ -1559,8 +1921,10 @@ namespace gpg::gal
         ((errors != nullptr) ? std::string(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()) : std::string());
       ThrowError("DeviceVulkan.cpp", __LINE__, message.c_str());
     }
+    const std::string_view preprocessedText(static_cast<const char*>(preprocessed->GetBufferPointer()), preprocessed->GetBufferSize() - 1U);
+#endif
     d3d11::TranslatedEffectSource translated = d3d11::TranslateEffectSource(
-      std::string_view(static_cast<const char*>(preprocessed->GetBufferPointer()), preprocessed->GetBufferSize() - 1U), true,
+      preprocessedText, true,
       // No original source: the D3D9 alpha test is applied by the effect layer (EffectDescription),
       // and running the translator's copy as well would test twice.
       std::string_view{}
@@ -2013,6 +2377,11 @@ namespace gpg::gal
     CollectCompleted();
     for (std::size_t headIndex = 0U; headIndex < mSwapChains.size(); ++headIndex) {
       Head& head = mDeviceContext.GetHead(static_cast<std::uint32_t>(headIndex));
+#if defined(FAF_POSIX)
+      const VkExtent2D requested = RequestedExtent(head);
+      CreateSwapChain(mSwapChains[headIndex], requested.width, requested.height);
+      mSwapChains[headIndex].outOfDate = false;
+#else
       std::uint32_t width = head.mWidth;
       std::uint32_t height = head.mHeight;
       if (width == 0U || height == 0U) {
@@ -2022,6 +2391,7 @@ namespace gpg::gal
         height = static_cast<std::uint32_t>(std::max<LONG>(client.bottom - client.top, 1));
       }
       CreateSwapChain(mSwapChains[headIndex], width, height);
+#endif
     }
     // The acquire semaphores of the old images may be signalled: start the frame over.
     Submit(true, false);
@@ -2120,6 +2490,19 @@ namespace gpg::gal
       present.pSwapchains = &swapChain.swapchain;
       present.pImageIndices = &swapChain.acquired;
       const VkResult result = Vk().vkQueuePresentKHR(mQueue, &present);
+#if defined(FAF_POSIX)
+      if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        swapChain.outOfDate = true; // AcquireNextImages rebuilds it
+      } else if (result == VK_SUBOPTIMAL_KHR && !swapChain.suboptimalNoted) {
+        // A resize or Retina scale change, until the engine's WM_SIZE resets the device at
+        // the new size. Meanwhile KosmicKrisp scales the image to the window; MoltenVK
+        // draws it unscaled into drawables of the layer's new size (SDL's Metal view
+        // resizes them), so the old image sits in a corner.
+        swapChain.suboptimalNoted = true;
+        gpg::Logf("Vulkan: head %u's window no longer matches its %ux%u swap chain (suboptimal until the device is reset)",
+                  static_cast<unsigned>(index), swapChain.extent.width, swapChain.extent.height);
+      }
+#endif
       if (result == VK_ERROR_DEVICE_LOST) {
         CheckVk("DeviceVulkan.cpp", __LINE__, result);
       } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
@@ -2130,6 +2513,18 @@ namespace gpg::gal
       }
     }
 
+#if defined(FAF_POSIX)
+    // Diagnostics (macos/tests/vulkan): FAF_VULKAN_TEST_OUT_OF_DATE=<frame> treats that
+    // frame's presents as out of date, FAF_VULKAN_TEST_NO_IMAGE=<frame> fails the next
+    // acquire - the rebuild and stand-in paths, which the Apple drivers never take on
+    // their own (a resize leaves their swap chains suboptimal, not out of date).
+    static const long testOutOfDate = EnvironmentNumber("FAF_VULKAN_TEST_OUT_OF_DATE", -1L);
+    if (static_cast<long>(mFrameNumber) == testOutOfDate) {
+      for (SwapChain& swapChain : mSwapChains) {
+        swapChain.outOfDate = true;
+      }
+    }
+#endif
     // The next frame slot: wait for what the GPU last did with it.
     mFrameIndex = (mFrameIndex + 1U) % vulkan::kFramesInFlight;
     ++mFrameCount;
@@ -2348,6 +2743,18 @@ namespace gpg::gal
     info.addressModeV = AddressMode(desc.addressV);
     info.addressModeW = AddressMode(desc.addressW);
     info.mipLodBias = desc.mipLodBias;
+#if defined(FAF_POSIX)
+    // Within the device's range; none where the portability subset has no LOD bias
+    // (MoltenVK: Metal samplers have none), which shifts those textures' mip choice.
+    const float maxBias = mProperties.limits.maxSamplerLodBias;
+    info.mipLodBias = mSamplerLodBias ? std::clamp(desc.mipLodBias, -maxBias, maxBias) : 0.0f;
+    if (!mSamplerLodBias && desc.mipLodBias != 0.0f) {
+      static int logged = 0;
+      if (logged++ < 4) {
+        gpg::Logf("Vulkan: a sampler's mip LOD bias %.2f is dropped (the device has none)", static_cast<double>(desc.mipLodBias));
+      }
+    }
+#endif
     info.anisotropyEnable = (anisotropic && mAnisotropy) ? VK_TRUE : VK_FALSE;
     info.maxAnisotropy = std::clamp(static_cast<float>(desc.maxAnisotropy), 1.0f, mProperties.limits.maxSamplerAnisotropy);
     info.compareEnable = VK_FALSE;
@@ -2393,6 +2800,11 @@ namespace gpg::gal
         info.maxSets = 4096U;
         info.poolSizeCount = 3U;
         info.pPoolSizes = sizes;
+#if defined(FAF_POSIX)
+        if (mTextureSetUpdateAfterBind) {
+          info.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT; // set 0's layout needs it
+        }
+#endif
         VkDescriptorPool pool = VK_NULL_HANDLE;
         CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateDescriptorPool(mDevice, &info, nullptr, &pool));
         frame.descriptorPools.push_back(pool);

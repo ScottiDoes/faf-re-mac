@@ -6,7 +6,7 @@
 
 extern "C" int global_mode_sse2;
 
-#if defined(_M_X64)
+#if defined(_M_X64) || defined(FAF_POSIX)
 // legacy/math/X87Math64.asm: the same instruction sequences for 64-bit code,
 // which has no inline assembly.
 extern "C" float __cdecl msvc8_x87_sinf(float x);

@@ -99,7 +99,7 @@ namespace
 
   [[nodiscard]] std::int32_t AtomicExchangeAddI32(volatile std::int32_t* const slot, const std::int32_t value) noexcept
   {
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(FAF_POSIX)
     return static_cast<std::int32_t>(
       _InterlockedExchangeAdd(reinterpret_cast<volatile long*>(slot), static_cast<long>(value))
     );
@@ -113,7 +113,7 @@ namespace
   [[nodiscard]] std::int32_t
   AtomicCompareExchangeI32(volatile std::int32_t* const slot, const std::int32_t desired, const std::int32_t expected) noexcept
   {
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(FAF_POSIX)
     return static_cast<std::int32_t>(
       _InterlockedCompareExchange(
         reinterpret_cast<volatile long*>(slot),

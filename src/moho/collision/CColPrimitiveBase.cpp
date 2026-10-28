@@ -152,7 +152,18 @@ namespace
       if (lhsMin > rhsMax || rhsMin > lhsMax) {
         return false;
       }
+#if defined(FAF_POSIX)
+      // x64 lowers std::fmin/std::fmax (llvm.minnum/maxnum) to cmpunordss + minss/maxss:
+      //   fmin(a, b) = isnan(a) ? b : (b < a ? b : a)
+      //   fmax(a, b) = isnan(a) ? b : (b > a ? b : a)
+      // arm64's fminnm/fmaxnm order the zeros (fmin(+0, -0) is -0 there, +0 on x64), so
+      // the x64 selects are spelled out (macos/docs/DETERMINISM.md section 5, rule 6).
+      const float overlapUpper = std::isnan(lhsMax) ? rhsMax : (rhsMax < lhsMax ? rhsMax : lhsMax);
+      const float overlapLower = std::isnan(lhsMin) ? rhsMin : (rhsMin > lhsMin ? rhsMin : lhsMin);
+      overlapAlongAxis[axisIndex] = overlapUpper - overlapLower;
+#else
       overlapAlongAxis[axisIndex] = std::fmin(lhsMax, rhsMax) - std::fmax(lhsMin, rhsMin);
+#endif
     }
 
     constexpr float kMaximumContactDepth = 1.0e9f;

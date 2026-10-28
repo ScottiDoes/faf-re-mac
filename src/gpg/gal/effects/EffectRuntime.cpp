@@ -249,8 +249,14 @@ namespace gpg::gal::effects
     // the generated HLSL of every effect there (local files, never shipped).
     if (const char* const dumpDirectory = std::getenv("FAF_EFFECT_DUMP_DIR"); dumpDirectory != nullptr && dumpDirectory[0] != '\0') {
       const std::size_t slash = mName.find_last_of("\\/");
+#if defined(FAF_POSIX)
+      // fopen takes the path as is here, where '\\' is an ordinary file name character.
+      const std::string base =
+        std::string(dumpDirectory) + "/" + ((slash == std::string::npos) ? mName : mName.substr(slash + 1U));
+#else
       const std::string base =
         std::string(dumpDirectory) + "\\" + ((slash == std::string::npos) ? mName : mName.substr(slash + 1U));
+#endif
       for (const auto& [suffix, text] : {std::pair<const char*, std::string_view>{".original.fx", originalSource},
                                          std::pair<const char*, std::string_view>{".translated.fx", translatedSource},
                                          std::pair<const char*, std::string_view>{".hlsl", mModern.hlsl}}) {

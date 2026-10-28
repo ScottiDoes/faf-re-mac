@@ -176,7 +176,7 @@ void CNetUDPConnection::Write(NetDataSpan* data)
     );
   }
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   mConnector->SignalSocketEvent();
 #endif
 }
@@ -206,7 +206,7 @@ void CNetUDPConnection::Close()
   mOutputShutdown = true;
   mOutputFlushPending = false;
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   mConnector->SignalSocketEvent();
 #endif
 }
@@ -235,7 +235,7 @@ void CNetUDPConnection::ScheduleDestroy()
   Close();
   mScheduleDestroy = true;
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   mConnector->SignalSocketEvent();
 #endif
 }
@@ -518,7 +518,7 @@ bool CNetUDPConnection::ProcessConnect(const SNetPacket* packet)
     mInputBuffer.Close(gpg::Stream::ModeBoth);
 
     if (mConnector->mSelectedEvent) {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
       SetEvent(mConnector->mSelectedEvent);
 #endif
     }
@@ -630,7 +630,7 @@ void CNetUDPConnection::ProcessAnswer(const SNetPacket* packet)
   // Binary rebinds/repurposes packet memory to this connection.
   AdoptPacket(packet);
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   if (mConnector->mSelectedEvent) {
     SetEvent(mConnector->mSelectedEvent);
   }
@@ -853,7 +853,7 @@ void CNetUDPConnection::ProcessData(SNetPacket* packet)
   EarlyRebuildAckMask(mExpectedSequenceNumber, mMask);
 
   // Signal connector event if progressed (matches SetEvent path in asm)
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   if (progressed && mConnector && mConnector->mSelectedEvent) {
     SetEvent(mConnector->mSelectedEvent);
   }
@@ -926,7 +926,7 @@ bool CNetUDPConnection::ProcessGoodbye(const SNetPacket* packet)
     }
 
     mInputBuffer.Close(gpg::Stream::ModeBoth);
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
     if (mConnector && mConnector->mSelectedEvent) {
       SetEvent(mConnector->mSelectedEvent);
     }
@@ -1369,7 +1369,7 @@ void CNetUDPConnection::SendPacket(SNetPacket* packet)
   packet->header.mSerialNumber = mNextSerialNumber;
   packet->header.mInResponseTo = mInResponseTo;
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   sockaddr_in to{};
   to.sin_family = AF_INET;
   to.sin_port = htons(mPort);

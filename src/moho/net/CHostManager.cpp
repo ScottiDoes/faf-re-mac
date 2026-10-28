@@ -145,11 +145,19 @@ bool moho::NET_GetAddrInfo(const char* str, const u_short defaultPort, const boo
   const int rc = getaddrinfo(nodeName.c_str(), serviceName.c_str(), &hints, &result);
   if (rc != 0 || result == nullptr) {
     char narrowError[0x400]{};
+#if defined(FAF_POSIX)
+    // POSIX getaddrinfo() returns EAI_* codes (Winsock returns WSA codes, which
+    // FormatMessage knows): their text comes from gai_strerror.
+    if (rc != 0) {
+      std::snprintf(narrowError, sizeof(narrowError), "%s", ::gai_strerror(rc));
+    }
+#else
     const wchar_t* const wideError = FormatSystemMessageWide(static_cast<DWORD>(rc));
 
     if (wideError[0] != L'\0') {
       WideCharToMultiByte(CP_ACP, 0, wideError, -1, narrowError, sizeof(narrowError), nullptr, nullptr);
     }
+#endif
 
     gpg::Logf(
       "getaddrinfo(%s,%s) failed: %s [ret=%d]",

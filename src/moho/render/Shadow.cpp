@@ -26,7 +26,9 @@ namespace gpg::gal
 {
   long DebugSaveSurfaceToFileA(const char* filePath, unsigned int fileFormat, void* sourceSurface);
 }
+#if !defined(FAF_POSIX)
 #include "gpg/gal/backends/d3d9/RenderTargetD3D9.hpp"
+#endif
 
 // Declared the way gpg/gal/Matrix.cpp declares its D3DX entry points, rather
 // than pulling in the D3DX headers - moho::VMatrix4 is layout-identical to
@@ -505,6 +507,11 @@ namespace moho
     restoreViewport();
 
     const auto dumpShadowTargets = [&](const bool includeBlur) {
+#if defined(FAF_POSIX)
+      // Diagnostics (FAF_TOGGLE_DIR) that save through the Direct3D 9 backend
+      // (D3DXSaveSurfaceToFile): not available on POSIX.
+      static_cast<void>(includeBlur);
+#else
       static bool sDumped = false;
       static unsigned sDumpCalls = 0;
       if (sDumped || (sDumpCalls++ % 120u) != 60u) {
@@ -541,6 +548,7 @@ namespace moho
       if (includeBlur) {
         dump(mBlurTargetB, "shadow_blurB");
       }
+#endif
     };
 
     if (!mShadowBlurEnabled) {

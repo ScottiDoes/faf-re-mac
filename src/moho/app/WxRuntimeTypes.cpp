@@ -14,14 +14,18 @@
 #include <new>
 #include <string>
 
+#if !defined(FAF_POSIX) // the POSIX build has no Direct3D 9 backend; nothing below uses it
 #include <d3d9.h>
+#endif
 
 #include "boost/shared_ptr.h"
 #include "gpg/core/containers/String.h"
 #include "gpg/gal/Device.hpp"
 #include "gpg/gal/DeviceContext.hpp"
 #include "gpg/gal/RenderProfiler.h"
+#if !defined(FAF_POSIX)
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
+#endif
 #include "moho/console/CConCommand.h"
 #include "moho/effects/rendering/SEfxCurve.h"
 #include "moho/mesh/Mesh.h"

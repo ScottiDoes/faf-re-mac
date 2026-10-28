@@ -10,7 +10,7 @@
 // On Windows the real <d3d9types.h> declares them - at global scope, where the
 // SDK's own headers (<d3d9.h>, <d3dx9.h>) expect to find them.
 //
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
 #include <d3d9types.h>
 #endif
 

@@ -113,11 +113,16 @@ namespace gpg::diag
     /** Walk under SEH: a stack in an unusual state must cost the sample, not the process. */
     std::uint32_t GuardedWalk(CONTEXT& context, std::uintptr_t* const frames)
     {
+#if defined(FAF_POSIX)
+      // No SEH on POSIX; GetThreadContext never yields a context to walk there.
+      return Walk(context, frames);
+#else
       __try {
         return Walk(context, frames);
       } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0U;
       }
+#endif
     }
 
     void TakeSample(SamplerState& state)

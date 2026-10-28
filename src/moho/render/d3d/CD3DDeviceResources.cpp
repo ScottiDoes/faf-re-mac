@@ -13,11 +13,20 @@
 #include "gpg/core/utils/BoostWrappers.h"
 #include "gpg/core/utils/Global.h"
 #include "gpg/core/utils/Logging.h"
+#if !defined(FAF_POSIX)
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
+#else
+#include "gpg/gal/Device.hpp"
+#endif
 #include "gpg/gal/Effect.hpp"
 #include "gpg/gal/RenderTarget.hpp"
+#if !defined(FAF_POSIX)
 #include "gpg/gal/backends/d3d9/TextureD3D9.hpp"
 #include "gpg/gal/backends/d3d9/VertexFormatD3D9.hpp"
+#else
+#include "gpg/gal/Texture.hpp"
+#include "gpg/gal/VertexFormat.hpp"
+#endif
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/render/ID3DRenderTarget.h"

@@ -9,6 +9,10 @@
 #ifndef VK_NO_PROTOTYPES
 #define VK_NO_PROTOTYPES
 #endif
+#if defined(FAF_POSIX) && !defined(VK_ENABLE_BETA_EXTENSIONS)
+// VK_KHR_portability_subset (MoltenVK) is declared in vulkan_beta.h.
+#define VK_ENABLE_BETA_EXTENSIONS
+#endif
 #include <vulkan/vulkan.h>
 
 #include <windows.h>
@@ -154,4 +158,13 @@ namespace gpg::gal::vulkan
 
   /** The process's Vulkan functions. */
   [[nodiscard]] Functions& Vk();
+#if defined(FAF_POSIX)
+
+  /** The file the Vulkan loader was opened from (empty before LoadGlobal). */
+  [[nodiscard]] const char* LoaderPath() noexcept;
+  /** Which driver manifest the loader was pointed at, and why (for the log). */
+  [[nodiscard]] const char* DriverSelection() noexcept;
+  /** True when the environment variable `name` is set to something other than "" or "0". */
+  [[nodiscard]] bool EnvironmentFlag(const char* name) noexcept;
+#endif
 } // namespace gpg::gal::vulkan
