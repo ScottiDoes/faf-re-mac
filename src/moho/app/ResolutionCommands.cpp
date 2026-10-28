@@ -14,6 +14,9 @@
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/WRenViewport.h"
 #include <wx/toplevel.h>
+#if defined(FAF_POSIX)
+#include "platform/posix/shell/Shell.h"
+#endif
 
 namespace
 {
@@ -119,6 +122,9 @@ namespace moho
       // borderless "fullscreen-styled" adapter mode that `mWindowed` here
       // actually flags, which is exactly when
       // `lock_fullscreen_cursor_to_window` (below) is meaningful.
+#if defined(FAF_POSIX)
+      const bool wasBordered = !head.mWindowed;
+#endif
       head.mWindowed = (valueToken->view() != "windowed");
       head.mWidth = static_cast<std::uint32_t>(wnd_DefaultCreateWidth);
       head.mHeight = static_cast<std::uint32_t>(wnd_DefaultCreateHeight);
@@ -135,9 +141,43 @@ namespace moho
         head.mWidth = static_cast<std::uint32_t>(parsedResolution.width);
         head.mHeight = static_cast<std::uint32_t>(parsedResolution.height);
         head.framesPerSecond = static_cast<std::uint32_t>(parsedResolution.framesPerSecond);
+#if defined(FAF_POSIX)
+        // macOS: exclusive full screen at a real display mode, the panel's native resolution
+        // when the display lacks this one (platform/posix/shell/Shell.h).
+        int modeWidth = static_cast<int>(head.mWidth);
+        int modeHeight = static_cast<int>(head.mHeight);
+        int modeRefresh = static_cast<int>(head.framesPerSecond);
+        if (faf_posix::shell::ResolveFullscreenMode(modeWidth, modeHeight, modeRefresh)) {
+          head.mWidth = static_cast<std::uint32_t>(modeWidth);
+          head.mHeight = static_cast<std::uint32_t>(modeHeight);
+          head.framesPerSecond = static_cast<std::uint32_t>(modeRefresh);
+        }
+        faf_posix::shell::SetFullscreenMode(modeWidth, modeHeight, modeRefresh);
+#endif
       } else {
         mainWindow->SetWindowStyleFlag(kBorderedAdapterStyle);
 
+#if defined(FAF_POSIX)
+        // Nothing writes Windows.Main.Previous.* (StartupHelpers.cpp, OPTIONS_ApplyStartup),
+        // so the code below always shrank the window to wnd_DefaultCreateWidth x Height - on
+        // every entry to the FAF lobby, for one. macOS keeps the current size when the frame
+        // is already a normal window, and otherwise restores the size the player last gave it
+        // (Windows.Main.*); it also leaves exclusive full screen.
+        faf_posix::shell::SetFullscreenMode(0, 0, 0);
+        if (wasBordered) {
+          const wxSize current = mainWindow->GetClientSize();
+          head.mWidth = static_cast<std::uint32_t>(current.x);
+          head.mHeight = static_cast<std::uint32_t>(current.y);
+        } else {
+          IUserPrefs* const preferences = USER_GetPreferences();
+          head.mWidth = static_cast<std::uint32_t>(preferences->GetInteger(
+            msvc8::string("Windows.Main.width"), static_cast<std::int32_t>(wnd_DefaultCreateWidth)
+          ));
+          head.mHeight = static_cast<std::uint32_t>(preferences->GetInteger(
+            msvc8::string("Windows.Main.height"), static_cast<std::int32_t>(wnd_DefaultCreateHeight)
+          ));
+        }
+#else
         IUserPrefs* const preferences = USER_GetPreferences();
         head.mWidth = static_cast<std::uint32_t>(preferences->GetInteger(
           msvc8::string(kPreviousWidthPrefKey), static_cast<std::int32_t>(wnd_DefaultCreateWidth)
@@ -145,6 +185,7 @@ namespace moho
         head.mHeight = static_cast<std::uint32_t>(preferences->GetInteger(
           msvc8::string(kPreviousHeightPrefKey), static_cast<std::int32_t>(wnd_DefaultCreateHeight)
         ));
+#endif
         head.framesPerSecond = 0;
 
         const HWND windowHandle = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(mainWindow->GetHandle()));

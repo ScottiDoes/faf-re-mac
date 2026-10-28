@@ -2,8 +2,9 @@
 //
 // SDL_Metal_CreateView adds a layer-backed view (its layer a CAMetalLayer) to the window's
 // content view, sized to it and following its size; SDL keeps the layer's drawableSize and
-// contentsScale in step with the view (its updateDrawableSize). A child HWND's view is moved
-// over the child's rectangle instead. The runtime is called directly because the Win32
+// contentsScale at the backing store's scale (its updateDrawableSize), which the shell then
+// sets to its own pixels per point (Panel.h). A child HWND's view is moved over the child's
+// rectangle instead. The runtime is called directly because the Win32
 // stand-ins (BOOL) and <objc/objc.h> cannot share a translation unit.
 
 #include "platform/posix/shell/ShellState.h"
@@ -27,6 +28,13 @@ namespace faf_posix::shell::detail
       double height;
     };
 
+    // CGSize: two CGFloats, an HFA passed in d0-d1.
+    struct Size
+    {
+      double width;
+      double height;
+    };
+
     template <typename Result, typename... Args>
     Result Message(void* receiver, const char* selector, Args... args) noexcept
     {
@@ -38,7 +46,8 @@ namespace faf_posix::shell::detail
     constexpr unsigned long kViewHeightSizable = 16; // NSViewHeightSizable
   } // namespace
 
-  void SetMetalViewFrame(SDL_MetalView view, double x, double y, double width, double height, bool fill) noexcept
+  void SetMetalViewFrame(SDL_MetalView view, double x, double y, double width, double height, bool fill,
+                         double pixelsPerPoint) noexcept
   {
     if (view == nullptr) {
       return;
@@ -60,6 +69,15 @@ namespace faf_posix::shell::detail
     void* const update = sel_registerName("updateDrawableSize");
     if (Message<bool>(view, "respondsToSelector:", update)) {
       Message<void>(view, "updateDrawableSize");
+    }
+    // The layer at the shell's pixels per point, not the backing store's that SDL just set:
+    // on a scaled desktop a panel-pixel drawable then fills the view exactly instead of
+    // covering its top-left part (Panel.h).
+    void* const layer = Message<void*>(view, "layer");
+    if (layer != nullptr && pixelsPerPoint > 0.0) {
+      const Rect viewBounds = Message<Rect>(view, "bounds");
+      Message<void>(layer, "setContentsScale:", pixelsPerPoint);
+      Message<void>(layer, "setDrawableSize:", Size{viewBounds.width * pixelsPerPoint, viewBounds.height * pixelsPerPoint});
     }
   }
 

@@ -817,6 +817,35 @@ namespace
     gpg::Logf("engine hooks: %s mounted at /fafengine", folderUtf8.c_str());
   }
 
+#if defined(FAF_POSIX)
+  /**
+   * macOS addition: the native build's own engine Lua, mounted at /fafengine-macos and
+   * registered as a hook directory like `fafengine` above. Its hook scales FAF's UI to the
+   * display panel (platform/posix/shell/Shell.h, UiScaleCorrection). Looked for next to
+   * `fafengine` (the run folder), else in the source tree the engine was built from
+   * (FAF_MACOS_LUA_DIR, macos/fafengine-macos).
+   */
+  void AppendMacosHookFolder(msvc8::vector<moho::SVFSMountPoint>& mountPoints)
+  {
+    std::error_code error;
+    std::filesystem::path folder("fafengine-macos");
+#if defined(FAF_MACOS_LUA_DIR)
+    if (!std::filesystem::is_directory(folder, error)) {
+      folder = std::filesystem::path(FAF_MACOS_LUA_DIR);
+    }
+#endif
+    if (!std::filesystem::is_directory(folder, error)) {
+      gpg::Warnf("engine hooks: no fafengine-macos folder; the UI is not scaled to the display panel");
+      return;
+    }
+    const std::filesystem::path absolute = std::filesystem::absolute(folder, error);
+    const std::string folderUtf8 = (error ? folder : absolute).string();
+    mountPoints.push_back(moho::SVFSMountPoint(folderUtf8.c_str(), "/fafengine-macos"));
+    moho::SCR_AddHookDirectory("/fafengine-macos");
+    gpg::Logf("engine hooks: %s mounted at /fafengine-macos", folderUtf8.c_str());
+  }
+#endif
+
   [[nodiscard]] LuaPlus::LuaObject ImportLuaModule(LuaPlus::LuaState* const state, const char* const modulePath)
   {
     if (state == nullptr || modulePath == nullptr || modulePath[0] == '\0') {
@@ -5855,6 +5884,9 @@ bool moho::DISK_SetupDataAndSearchPaths(msvc8::string dataPathScriptName, const 
     mountPoints = CollectMountPointsFromLua(startupState);
     ApplyHookDirectoriesFromLua(startupState);
     AppendEngineHookFolder(mountPoints);
+#if defined(FAF_POSIX)
+    AppendMacosHookFolder(mountPoints);
+#endif
   }
 
   {

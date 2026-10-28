@@ -5,10 +5,11 @@
 // each window can present through a CAMetalLayer (MetalLayer, MetalView.cpp). Headless runs
 // never call Init(), and every function here then answers "no window system".
 //
-// FAF_SHELL_HIGHDPI=0 in the environment creates the windows at one pixel per point (the
-// drawable is then the window's size in points, scaled up by the compositor on Retina).
+// What a pixel is (Panel.h): a window's backing-store pixels, a full-screen mode's own
+// pixels; FAF_SHELL_HIGHDPI=0 one pixel per point.
 
 #include "platform/posix/shell/ShellState.h"
+#include "platform/posix/shell/Panel.h"
 
 #include <pthread.h>
 #include <unistd.h>
@@ -122,8 +123,8 @@ namespace faf_posix::shell
     }
     s.sdlStarted = true;
 
-    const char* const highDpi = std::getenv("FAF_SHELL_HIGHDPI");
-    s.highDensity = highDpi == nullptr || std::strcmp(highDpi, "0") != 0;
+    // Retina backing stores unless pixels are points (Panel.h, FAF_SHELL_HIGHDPI=0).
+    s.highDensity = detail::PixelModeSetting() != detail::PixelMode::Points;
     s.wakeEventType = SDL_RegisterEvents(1);
     detail::RefreshDisplays();
 
@@ -142,7 +143,7 @@ namespace faf_posix::shell
     detail::TestInputInit();
     std::fprintf(stderr, "[shell] SDL %d.%d.%d video '%s', screen scale %.2f%s\n", SDL_MAJOR_VERSION,
                  SDL_MINOR_VERSION, SDL_MICRO_VERSION, SDL_GetCurrentVideoDriver(), s.screenScale,
-                 s.highDensity ? "" : " (FAF_SHELL_HIGHDPI=0: one pixel per point)");
+                 detail::PixelModeSetting() == detail::PixelMode::Points ? " (FAF_SHELL_HIGHDPI=0: one pixel per point)" : "");
     return true;
   }
 

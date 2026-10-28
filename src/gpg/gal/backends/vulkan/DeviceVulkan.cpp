@@ -18,6 +18,7 @@
 
 #include "gpg/gal/Error.hpp"
 #include "platform/posix/gal/HlslPreprocess.h"
+#include "platform/posix/shell/Shell.h"
 #endif
 
 #include "VulkanSurface.h"
@@ -1854,6 +1855,21 @@ namespace gpg::gal
   {
     static_cast<void>(adapterIndex);
     outModes.clear(); // windowed and borderless only: no exclusive modes on this backend
+#if defined(FAF_POSIX)
+    // macOS: the main display's real resolutions, the panel's native one first, which the
+    // Options screen offers next to "windowed" as exclusive full screen
+    // (platform/posix/shell/Shell.h).
+    int width = 0;
+    int height = 0;
+    int refreshRate = 0;
+    for (int index = 0; adapterIndex == 0 && faf_posix::shell::FullscreenMode(index, width, height, refreshRate); ++index) {
+      HeadAdapterMode mode;
+      mode.width = static_cast<std::uint32_t>(width);
+      mode.height = static_cast<std::uint32_t>(height);
+      mode.refreshRate = static_cast<std::uint32_t>(refreshRate);
+      outModes.push_back(mode);
+    }
+#endif
   }
 
   OutputContext* DeviceVulkan::GetHeadOutputContext(const unsigned int headIndex)

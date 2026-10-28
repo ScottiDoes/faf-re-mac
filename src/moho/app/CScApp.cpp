@@ -50,12 +50,78 @@
 #include "moho/task/CTaskThread.h"
 #include "moho/ui/IUIManager.h"
 #include "moho/ui/UiWorldShapes.h"
+#if defined(FAF_POSIX)
+#include <cstdio>
+
+#include "moho/lua/CScrLuaObjectFactory.h"
+#include "platform/posix/shell/Shell.h"
+#endif
 
 namespace gpg
 {
   void Logf(const char* fmt, ...);
   void Warnf(const char* fmt, ...);
 } // namespace gpg
+#if defined(FAF_POSIX)
+
+namespace
+{
+  // macOS: when the saved primary_adapter resolution is not one of this display's modes
+  // (FA's default 1024,768,60, a size from another display), the game opens at the panel's
+  // native mode instead. Storing that in the profile makes the Options screen show the mode
+  // in use, so choosing "windowed" there is a change it acts on. Through the profile table
+  // only: optionslogic.SetCurrent would apply options mid-start-up.
+  void StoreResolvedAdapterMode(const int width, const int height, const int refreshRate)
+  {
+    LuaPlus::LuaState* const state = moho::USER_GetLuaState();
+    if (state == nullptr) {
+      return;
+    }
+    try {
+      LuaPlus::LuaObject prefs = moho::SCR_Import(state, "/lua/user/prefs.lua");
+      LuaPlus::LuaFunction<LuaPlus::LuaObject> getField(prefs["GetFromCurrentProfile"]);
+      LuaPlus::LuaObject options = getField("options");
+      if (!options.IsTable()) {
+        return; // no profile yet: a new profile starts from the defaults and comes here again
+      }
+      char value[48];
+      std::snprintf(value, sizeof(value), "%d,%d,%d", width, height, refreshRate);
+      options.SetString("primary_adapter", value);
+      LuaPlus::LuaFunction<LuaPlus::LuaObject> setField(prefs["SetToCurrentProfile"]);
+      (void)setField("options", options);
+      gpg::Logf("display: primary_adapter is now %s (the display's native mode)", value);
+    } catch (const std::exception& exception) {
+      gpg::Warnf("display: could not store primary_adapter: %s", exception.what());
+    }
+  }
+
+  // macOS: FAF's layout scale is the player's UI Scale times Shell.h's UiScaleCorrection
+  // (backing pixels per panel pixel), applied by the macos/fafengine-macos hook whenever the
+  // layout module loads. A load before the window existed (reading options here) used the
+  // desktop's factor; this sets it again from the window's display and mode, exactly.
+  void ApplyUiScaleCorrection()
+  {
+    LuaPlus::LuaState* const state = moho::USER_GetLuaState();
+    if (state == nullptr) {
+      return;
+    }
+    try {
+      float playerScale = moho::OPTIONS_GetFloat("ui_scale");
+      if (!(playerScale > 0.0f)) {
+        playerScale = 1.0f;
+      }
+      const float correction = faf_posix::shell::UiScaleCorrection();
+      LuaPlus::LuaObject helpers = moho::SCR_Import(state, "/lua/maui/layouthelpers.lua");
+      LuaPlus::LuaFunction<LuaPlus::LuaObject> setFactor(helpers["SetPixelScaleFactor"]);
+      (void)setFactor(playerScale * correction);
+      gpg::Logf("display: UI scale %.4g (UI Scale %.4g x %.4g for the display panel)", playerScale * correction,
+                playerScale, correction);
+    } catch (const std::exception& exception) {
+      gpg::Warnf("display: could not scale the UI: %s", exception.what());
+    }
+  }
+} // namespace
+#endif
 
 namespace
 {
@@ -1497,6 +1563,28 @@ bool CScApp::CreateDevice()
     }
   }
 
+#if defined(FAF_POSIX)
+  // macOS: a borderless head (a primary_adapter resolution, /fullscreen) is exclusive full
+  // screen at a real display mode - the request when the display has it, else the panel's
+  // native resolution, FA's default 1024,768,60 included - and sizes are the panel's pixels
+  // (platform/posix/shell/Shell.h). A windowed head cancels an earlier request.
+  if (primaryHead.mWindowed) {
+    int width = static_cast<int>(primaryHead.mWidth);
+    int height = static_cast<int>(primaryHead.mHeight);
+    int refreshRate = static_cast<int>(primaryHead.framesPerSecond);
+    if (faf_posix::shell::ResolveFullscreenMode(width, height, refreshRate)) {
+      if (width != static_cast<int>(primaryHead.mWidth) || height != static_cast<int>(primaryHead.mHeight)) {
+        StoreResolvedAdapterMode(width, height, refreshRate);
+      }
+      primaryHead.mWidth = static_cast<std::uint32_t>(width);
+      primaryHead.mHeight = static_cast<std::uint32_t>(height);
+      primaryHead.framesPerSecond = static_cast<std::uint32_t>(refreshRate);
+    }
+    faf_posix::shell::SetFullscreenMode(width, height, refreshRate);
+  } else {
+    faf_posix::shell::SetFullscreenMode(0, 0, 0);
+  }
+#endif
   if (context.GetHeadCount() == 1 &&
       moho::CFG_GetArgOptionAliases(moho::CFG_GetAdapterOptionAliases(), 1, &options) &&
       !options.empty()) {
@@ -1587,6 +1675,9 @@ bool CScApp::CreateDevice()
   if (const gpg::gal::DeviceContext* const createdContext = device->GetDeviceContext()) {
     ApplyWindowTitleDetails(title, *createdContext);
   }
+#if defined(FAF_POSIX)
+  ApplyUiScaleCorrection();
+#endif
   return true;
 }
 

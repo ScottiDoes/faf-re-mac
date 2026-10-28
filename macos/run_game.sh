@@ -1,9 +1,9 @@
 #!/bin/zsh
-# The game in a window (milestone 2): runs build/macos/faf_game from the native run folder
+# The game (milestones 2-3): runs build/macos/faf_game from the native run folder
 # /Users/scottharris/Gaming/faf-re-bin/run-native (FAF's init files; init_faf.lua reads
 # ../fa_path.lua and mounts ../gamedata, both next to that folder), as the FAF client starts
-# the game: /init init_faf.lua /nobugreport, plus /nosound /nomovie (no audio or movies on
-# macOS yet) and a log file. Rendering is faf-re's Vulkan renderer on MoltenVK (or
+# the game: /init init_faf.lua /nobugreport, with sound (XACT on FAudio) and movies (FFmpeg),
+# and a log file. Rendering is faf-re's Vulkan renderer on MoltenVK (or
 # KosmicKrisp) from the LunarG Vulkan SDK; the engine finds the SDK by itself.
 #
 # Usage: macos/run_game.sh [extra faf_game switches ...]
@@ -15,9 +15,12 @@
 #                      (init_bench.lua + /benchspeed <n>); default: the replay's own speed
 #   INIT               init file, absolute or in the run folder (default init_faf.lua;
 #                      init_bench.lua with SPEED)
-#   SIZE="<w> <h>"     window client size in pixels (/windowed w h; default "2560 1600", which
-#                      is 1280x800 points on a Retina display). SIZE=prefs: the game's own
-#                      choice from Game.prefs (primary_adapter; default 1024x768 borderless)
+#   SIZE="<w> <h>"     a window of this client size in its backing store's pixels (/windowed w h;
+#                      2 per point on a Retina desktop). Default: the game's own choice
+#                      from Game.prefs (primary_adapter): a resolution is exclusive full
+#                      screen at that display mode, the panel's native one by default;
+#                      "windowed" is the saved window size
+#   NOSOUND=1, NOMOVIE=1  /nosound, /nomovie: no sound, no movies
 #   PREFS=<name>       preferences file in ~/Library/Application Support/Gas Powered Games/
 #                      Supreme Commander Forged Alliance (/prefs <name>; default Game.prefs).
 #                      bringup-high.prefs there has the bring-up's high-fidelity profile
@@ -48,7 +51,7 @@ OUT=${OUT:A}
 LOG=${LOG:-$OUT/game.log}
 LOG=${LOG:A}
 TIME=${TIME:-0}
-SIZE=${SIZE:-2560 1600}
+SIZE=${SIZE:-prefs}
 
 fail() { print -u2 "run_game: $*"; exit 2 }
 [[ -x $EXE ]] || fail "no game at $EXE (ninja -C build/macos faf_game)"
@@ -63,7 +66,9 @@ fi
 [[ $INIT == /* ]] || INIT=$RUN/$INIT
 [[ -f $INIT ]] || fail "no init file $INIT"
 
-args=(/init "$INIT" /nobugreport /log "$LOG" /nosound /nomovie)
+args=(/init "$INIT" /nobugreport /log "$LOG")
+[[ ${NOSOUND:-0} == 1 ]] && args+=(/nosound)
+[[ ${NOMOVIE:-0} == 1 ]] && args+=(/nomovie)
 [[ -n ${PREFS:-} ]] && args+=(/prefs "$PREFS")
 if [[ $SIZE != prefs ]]; then
     args+=(/windowed ${=SIZE})

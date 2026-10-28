@@ -165,6 +165,8 @@ target_include_directories(faf_engine PUBLIC
 # Development fallback for finding the Vulkan loader, the ICD/layer manifests and DXC
 # when nothing else names them (FAF_VULKAN_LIBRARY, VK_DRIVER_FILES, FAF_DXC_DIR).
 target_compile_definitions(faf_engine PUBLIC "FAF_VULKAN_SDK_DIR=\"${FAF_VULKAN_SDK}\"")
+# The native build's own engine Lua (macos/fafengine-macos), when the run folder has no copy.
+target_compile_definitions(faf_engine PUBLIC "FAF_MACOS_LUA_DIR=\"${CMAKE_CURRENT_LIST_DIR}/fafengine-macos\"")
 target_link_libraries(faf_engine PUBLIC faf_codegen Wm3Foundation faf_zlib)
 target_compile_options(faf_engine PUBLIC
   # Every translation unit sees the Win32 stand-ins, as every Windows TU sees

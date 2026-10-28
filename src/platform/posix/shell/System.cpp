@@ -5,6 +5,7 @@
 // memory owned by the clipboard (wide text is wchar_t, as in-memory wide text is on POSIX).
 
 #include "platform/posix/shell/ShellState.h"
+#include "platform/posix/shell/Panel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -99,12 +100,10 @@ namespace faf_posix::shell
       int count = 0;
       SDL_DisplayID* const ids = SDL_GetDisplays(&count);
       const SDL_DisplayID primary = SDL_GetPrimaryDisplay();
-      float scale = 1.0f;
-      if (s.highDensity) {
-        if (const SDL_DisplayMode* const mode = SDL_GetDesktopDisplayMode(primary); mode != nullptr && mode->pixel_density > 0.0f) {
-          scale = mode->pixel_density;
-        }
-      }
+      // Screen coordinates in the main display's pixels (Panel.h); what was learned about
+      // the displays is relearned, since they changed.
+      ForgetDisplays();
+      const float scale = DisplayScale(primary);
       s.screenScale = scale;
       auto& monitors = Monitors();
       monitors.clear();
