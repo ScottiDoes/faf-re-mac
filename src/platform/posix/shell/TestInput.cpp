@@ -7,11 +7,28 @@
 // frame once the device is up); a step runs when its frame is reached. Coordinates are client
 // pixels of the first top-level window (what the engine sees). Actions:
 //   move X Y              the mouse moves to (X, Y)
-//   down X Y B / up X Y B button B (1 left, 2 middle, 3 right) pressed / released at (X, Y)
+//   rel DX DY             the mouse moves by (DX, DY) from where the pointer is now, as a
+//                         physical mouse does: after the game warped the pointer
+//                         (SetCursorPos: the middle-drag camera re-centres it every frame)
+//                         the motion starts from the warped position
+//   down X Y B [C] / up X Y B [C]  button B (1 left, 2 middle, 3 right) pressed / released
+//                         at (X, Y) ("here" in place of X Y: where the pointer is); C is
+//                         AppKit's click count (2: the second click of a double click)
 //   wheel X Y N           the mouse moves to (X, Y), then the wheel turns N notches (N > 0:
 //                         away from the user, as a Windows WHEEL_DELTA of +120 per notch)
-//   key NAME down|up      a key (an SDL key name: "Up", "Left", "A", "Space", "Return", ...)
+//   key NAME [down|up]    a key (an SDL key name, spaces allowed: "Up", "A", "Return", "F1",
+//                         "Left Shift", "Left Ctrl", "Left Alt", "Left GUI" (Command), ...);
+//                         the modifier keys held by the script are in each key event's
+//                         modifier state, as SDL reports them
 //   text WORD             typed text (SDL text input: WM_CHAR), the rest of the step
+//   focus lost|gained     the first window loses / regains the keyboard focus, as when the
+//                         user switches to another application (Cmd+Tab) and back; as SDL
+//                         does, the keys the script holds are released first
+//   quit                  SDL's quit request (Cmd+Q, the application menu's Quit)
+//   close                 the window's close button
+//   shot NAME             captures the next rendered frame into $FAF_SHELL_TEST_SHOTS/<frame>-NAME/
+//                         (faf_game: the engine's dump_Frame, a BMP; the folder path must
+//                         not contain a space, the console splits arguments at spaces)
 //   log TEXT              writes TEXT to stderr
 // Every step is posted with SDL_PushEvent, so it takes the shell's normal path (Input.cpp)
 // into Win32 messages and wx events. While the script is active:
@@ -19,17 +36,22 @@
 //    script set, and SetCursorPos (the middle-drag camera's pointer warp) moves only that
 //    position, never the user's real pointer;
 //  - mouse and keyboard events that did not come from the script are dropped, so the
-//    user's own input cannot disturb a test.
+//    user's own input cannot disturb a test; so is the window system's focus loss (another
+//    program's window coming to the front), so the window keeps the keyboard.
 // Each step is logged to stderr as "[shell-test] frame N: <step>".
 
 #include "platform/posix/shell/ShellState.h"
 
+#include <sys/stat.h>
+
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace faf_posix::shell::detail
@@ -39,6 +61,8 @@ namespace faf_posix::shell::detail
     // The `which` id of the script's mouse and keyboard events.
     constexpr SDL_MouseID kTestMouse = 0x7E57u;
     constexpr SDL_KeyboardID kTestKeyboard = 0x7E57u;
+    // data1 of the script's window events (focus, close).
+    constexpr Sint32 kTestWindowEvent = 0x7E57;
 
     struct Step
     {
@@ -57,6 +81,8 @@ namespace faf_posix::shell::detail
       float cursorX = 0.0f; // global points
       float cursorY = 0.0f;
       std::uint32_t buttons = 0; // SDL_BUTTON_MASK bits
+      SDL_Keymod mods = SDL_KMOD_NONE; // modifier keys the script holds
+      std::vector<std::pair<SDL_Scancode, SDL_Keycode>> held; // keys the script holds down
       std::vector<std::unique_ptr<char[]>> texts; // text events' strings (SDL keeps the pointer)
       int pendingTexts = 0; // pushed text events not yet taken (text events carry no source id)
     };
@@ -65,6 +91,28 @@ namespace faf_posix::shell::detail
     {
       static TestState state;
       return state;
+    }
+
+    TestShotHandler sShotHandler = nullptr;
+
+    void Shot(const Step& step) noexcept
+    {
+      const char* const root = std::getenv("FAF_SHELL_TEST_SHOTS");
+      if (sShotHandler == nullptr || root == nullptr || root[0] == '\0' || std::strchr(root, ' ') != nullptr) {
+        std::fprintf(stderr, "[shell-test] shot skipped: %s\n",
+                     sShotHandler == nullptr ? "no capture in this program" : "FAF_SHELL_TEST_SHOTS unset or has a space");
+        return;
+      }
+      std::string name = step.args.empty() ? std::string("shot") : step.args[0];
+      for (char& c : name) {
+        if (c == '/' || c == ' ' || c == '\\') {
+          c = '_';
+        }
+      }
+      const std::string directory = std::string(root) + "/" + std::to_string(T().frame) + "-" + name;
+      (void)::mkdir(root, 0755);
+      (void)::mkdir(directory.c_str(), 0755);
+      sShotHandler(directory.c_str());
     }
 
     std::string Trim(const std::string& text)
@@ -116,6 +164,10 @@ namespace faf_posix::shell::detail
       if (step.action == "log") {
         return;
       }
+      if (step.action == "shot") {
+        Shot(step);
+        return;
+      }
       SDL_WindowID window = 0;
       float originX = 0.0f;
       float originY = 0.0f;
@@ -144,10 +196,35 @@ namespace faf_posix::shell::detail
       float y = 0.0f;
       if (step.action == "move") {
         moveTo(Number(step, 0), Number(step, 1), &x, &y);
+      } else if (step.action == "rel") {
+        // From the pointer's current position (client pixels), wherever the game put it.
+        const float dx = Number(step, 0) / density;
+        const float dy = Number(step, 1) / density;
+        t.cursorX += dx;
+        t.cursorY += dy;
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_MOTION;
+        event.motion.timestamp = SDL_GetTicksNS();
+        event.motion.windowID = window;
+        event.motion.which = kTestMouse;
+        event.motion.state = t.buttons;
+        event.motion.x = t.cursorX - originX;
+        event.motion.y = t.cursorY - originY;
+        event.motion.xrel = dx;
+        event.motion.yrel = dy;
+        (void)SDL_PushEvent(&event);
       } else if (step.action == "down" || step.action == "up") {
-        moveTo(Number(step, 0), Number(step, 1), &x, &y);
+        // "here" in place of X Y: where the pointer is now (after relative motion and warps).
+        const bool here = !step.args.empty() && step.args[0] == "here";
+        if (here) {
+          x = t.cursorX - originX;
+          y = t.cursorY - originY;
+        } else {
+          moveTo(Number(step, 0), Number(step, 1), &x, &y);
+        }
+        const std::size_t argBase = here ? 1 : 2;
         const bool down = step.action == "down";
-        const Uint8 button = Button(step, 2);
+        const Uint8 button = Button(step, argBase);
         if (down) {
           t.buttons |= SDL_BUTTON_MASK(button);
         } else {
@@ -160,7 +237,7 @@ namespace faf_posix::shell::detail
         event.button.which = kTestMouse;
         event.button.button = button;
         event.button.down = down;
-        event.button.clicks = 1;
+        event.button.clicks = static_cast<Uint8>(step.args.size() > argBase + 1 ? std::max(1, std::atoi(step.args[argBase + 1].c_str())) : 1);
         event.button.x = x;
         event.button.y = y;
         (void)SDL_PushEvent(&event);
@@ -179,14 +256,44 @@ namespace faf_posix::shell::detail
         event.wheel.integer_y = static_cast<Sint32>(event.wheel.y);
         (void)SDL_PushEvent(&event);
       } else if (step.action == "key") {
-        const SDL_Keycode key = SDL_GetKeyFromName(step.args.empty() ? "" : step.args[0].c_str());
+        // The key's name is every word but a trailing "down" / "up" ("Left Shift down").
+        std::vector<std::string> words = step.args;
+        bool down = true;
+        if (!words.empty() && (words.back() == "down" || words.back() == "up")) {
+          down = words.back() == "down";
+          words.pop_back();
+        }
+        std::string name;
+        for (const std::string& word : words) {
+          name += (name.empty() ? "" : " ") + word;
+        }
+        const SDL_Keycode key = SDL_GetKeyFromName(name.c_str());
         if (key == SDLK_UNKNOWN) {
-          std::fprintf(stderr, "[shell-test] unknown key name; step skipped\n");
+          std::fprintf(stderr, "[shell-test] unknown key name '%s'; step skipped\n", name.c_str());
           return;
         }
         SDL_Keymod mod = SDL_KMOD_NONE;
         const SDL_Scancode scancode = SDL_GetScancodeFromKey(key, &mod);
-        const bool down = step.args.size() < 2 || step.args[1] != "up";
+        // SDL's modifier state includes the modifier key's own change (a Shift key-down
+        // already reports Shift).
+        SDL_Keymod bit = SDL_KMOD_NONE;
+        switch (scancode) {
+          case SDL_SCANCODE_LSHIFT: bit = SDL_KMOD_LSHIFT; break;
+          case SDL_SCANCODE_RSHIFT: bit = SDL_KMOD_RSHIFT; break;
+          case SDL_SCANCODE_LCTRL: bit = SDL_KMOD_LCTRL; break;
+          case SDL_SCANCODE_RCTRL: bit = SDL_KMOD_RCTRL; break;
+          case SDL_SCANCODE_LALT: bit = SDL_KMOD_LALT; break;
+          case SDL_SCANCODE_RALT: bit = SDL_KMOD_RALT; break;
+          case SDL_SCANCODE_LGUI: bit = SDL_KMOD_LGUI; break;
+          case SDL_SCANCODE_RGUI: bit = SDL_KMOD_RGUI; break;
+          default: break;
+        }
+        t.mods = down ? static_cast<SDL_Keymod>(t.mods | bit) : static_cast<SDL_Keymod>(t.mods & ~bit);
+        t.held.erase(std::remove_if(t.held.begin(), t.held.end(), [&](const auto& k) { return k.first == scancode; }),
+                     t.held.end());
+        if (down) {
+          t.held.emplace_back(scancode, key);
+        }
         SDL_Event event{};
         event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
         event.key.timestamp = SDL_GetTicksNS();
@@ -194,8 +301,43 @@ namespace faf_posix::shell::detail
         event.key.which = kTestKeyboard;
         event.key.scancode = scancode;
         event.key.key = key;
-        event.key.mod = SDL_KMOD_NONE;
+        event.key.mod = t.mods;
         event.key.down = down;
+        (void)SDL_PushEvent(&event);
+      } else if (step.action == "focus" || step.action == "close") {
+        const bool lost = step.action == "focus" && !step.args.empty() && step.args[0] == "lost";
+        if (lost) {
+          // What SDL does when the window loses the keyboard focus (SDL_ResetKeyboard): every
+          // key still down is released, before the focus event.
+          for (auto it = t.held.rbegin(); it != t.held.rend(); ++it) {
+            SDL_Event release{};
+            release.type = SDL_EVENT_KEY_UP;
+            release.key.timestamp = SDL_GetTicksNS();
+            release.key.windowID = window;
+            release.key.which = kTestKeyboard;
+            release.key.scancode = it->first;
+            release.key.key = it->second;
+            release.key.mod = SDL_KMOD_NONE;
+            release.key.down = false;
+            (void)SDL_PushEvent(&release);
+          }
+          t.held.clear();
+          t.mods = SDL_KMOD_NONE;
+        }
+        SDL_Event event{};
+        if (step.action == "close") {
+          event.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+        } else {
+          event.type = lost ? SDL_EVENT_WINDOW_FOCUS_LOST : SDL_EVENT_WINDOW_FOCUS_GAINED;
+        }
+        event.window.timestamp = SDL_GetTicksNS();
+        event.window.windowID = window;
+        event.window.data1 = kTestWindowEvent;
+        (void)SDL_PushEvent(&event);
+      } else if (step.action == "quit") {
+        SDL_Event event{};
+        event.type = SDL_EVENT_QUIT;
+        event.quit.timestamp = SDL_GetTicksNS();
         (void)SDL_PushEvent(&event);
       } else if (step.action == "text") {
         const std::string& typed = step.args.empty() ? std::string() : step.args[0];
@@ -277,6 +419,11 @@ namespace faf_posix::shell::detail
     }
   }
 
+  void TestInputSetShotHandler(TestShotHandler handler) noexcept
+  {
+    sShotHandler = handler;
+  }
+
   bool TestInputActive() noexcept
   {
     return T().active;
@@ -298,6 +445,10 @@ namespace faf_posix::shell::detail
       case SDL_EVENT_KEY_DOWN:
       case SDL_EVENT_KEY_UP:
         return event.key.which != kTestKeyboard;
+      case SDL_EVENT_WINDOW_FOCUS_LOST:
+        // Another program's window taking the focus (other test runs) must not take the
+        // keyboard away from the script; the script's own "focus lost" passes.
+        return event.window.data1 != kTestWindowEvent;
       case SDL_EVENT_TEXT_INPUT:
         if (T().pendingTexts > 0) {
           --T().pendingTexts;

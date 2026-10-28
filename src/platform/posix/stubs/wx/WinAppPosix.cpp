@@ -52,8 +52,11 @@
 #include "moho/app/WxRuntimeTypes.h"
 #include "moho/core/Thread.h"
 #include "moho/misc/StartupHelpers.h"
+#include "moho/render/WRenViewport.h"
+#include "moho/render/d3d/CD3DDevice.h"
 #include "moho/resource/ResourceManager.h"
 #include "platform/X87Precision.h"
+#include "platform/posix/shell/Shell.h"
 
 // The application object: wxEntry builds a moho::MohoApp through this factory, and
 // wxGetApp() (DECLARE_APP in WxRuntimeTypes.h) returns it.
@@ -120,6 +123,47 @@ namespace
       return INFINITE;
     }
     return static_cast<DWORD>(FloorFrndintAdjustDown(remainingMs));
+  }
+
+  // POSIX addition: the frame loop's liveness (WAVE3 finding F1, the idle main menu).
+  //
+  // The game draws on WM_PAINT: CScApp::Main ends each frame with CD3DDevice::Refresh (the
+  // viewport becomes invalid, so the wait below returns at once for QS_PAINT and the next
+  // turn dispatches the paint that presents), or, inside the frame-time clamp, with a wakeup
+  // timer. A message pump run *inside* Main takes that paint away: Lua's FlushEvents()
+  // (UiRuntimeTypes.cpp, SuspendInputWindowEventHandlersAndFlushQueue: Pending/Dispatch until
+  // the queue is empty) at the end of the main menu's CreateUI, which runs in the first Main
+  // (InitializeSessionFromCommandLine -> UI_StartFrontEnd), and at game start in gamemain.lua.
+  // The loop then waits with nothing to wake it. On Windows the next stray message restarts
+  // the chain within milliseconds (the WM_MOUSEMOVE Windows synthesizes when a window appears
+  // under the cursor, activation and IME traffic); AppKit has delivered all of that before
+  // the flush, so here the menu stood still until the user moved the mouse.
+  //
+  // True when Main left the shown, not minimized main window's viewport - the window
+  // CD3DDevice::Refresh invalidates - without a pending WM_PAINT and set no wakeup timer: the
+  // wait then returns at once, as for that stray message, and the next Main draws (or waits
+  // out the frame clamp with its own timer). In the normal chain a paint is pending here and
+  // nothing changes; minimized (no Refresh) and headless (no shell) never match.
+  bool FrameChainBroken(const DWORD timeoutMs)
+  {
+    if (timeoutMs != INFINITE || !faf_posix::shell::IsActive()) {
+      return false;
+    }
+    wxWindow* const mainWindow = moho::WIN_GetMainWindow();
+    moho::CD3DDevice* const device = moho::D3D_GetDevice();
+    moho::WRenViewport* const viewport = device != nullptr ? device->GetViewport() : nullptr;
+    if (mainWindow == nullptr || viewport == nullptr) {
+      return false;
+    }
+    const auto handleOf = [](wxWindow* const window) {
+      return reinterpret_cast<HWND>(static_cast<std::uintptr_t>(window->GetHandle()));
+    };
+    const HWND frame = handleOf(mainWindow);
+    const HWND view = handleOf(viewport);
+    if (frame == nullptr || view == nullptr || ::IsIconic(frame) != FALSE || ::IsWindowVisible(view) == FALSE) {
+      return false;
+    }
+    return (HIWORD(::GetQueueStatus(QS_PAINT)) & QS_PAINT) == 0;
   }
 
   // Crash-report attachments (WinApp.cpp's CrashReportAttachmentRegistry): the report
@@ -365,7 +409,10 @@ void moho::WIN_AppExecute(IWinApp* const app)
 
     WIN_GetBeforeWaitStage().UserFrame();
 
-    const DWORD timeoutMs = ComputeWaitTimeoutMs();
+    DWORD timeoutMs = ComputeWaitTimeoutMs();
+    if (FrameChainBroken(timeoutMs)) {
+      timeoutMs = 0; // see FrameChainBroken
+    }
     wakeupTimerDur = kInfiniteWakeupMs;
     WIN_GetWaitHandleSet()->MsgWaitEx(timeoutMs);
   }

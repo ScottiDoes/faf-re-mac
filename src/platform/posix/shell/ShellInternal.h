@@ -29,6 +29,12 @@ namespace faf_posix::shell
   // Wakes a WaitForEvent() in progress (any thread).
   void WakeMainThread() noexcept;
 
+  // Synthetic test input (FAF_SHELL_TEST_INPUT, TestInput.cpp): the game registers how a
+  // "shot" step captures a frame (faf_game: the engine's dump_Frame console command, which
+  // writes the next rendered frame as a BMP into `directory`; the path has no spaces).
+  using TestShotHandler = void (*)(const char* directory);
+  void SetTestShotHandler(TestShotHandler handler) noexcept;
+
   // The Win32 event that PostMessageW signals, given to the Sync area as the main thread's
   // "message queue" event (faf_posixSetThreadMessageEvent).
   [[nodiscard]] HANDLE QueueEvent() noexcept;

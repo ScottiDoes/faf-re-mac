@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <unordered_map>
 
 namespace faf_posix::shell
@@ -594,6 +595,16 @@ namespace faf_posix::shell
       const Uint32 type = event.type;
       if (type == S().wakeEventType) {
         return;
+      }
+      // FAF_SHELL_TRACE_INPUT=1 (debugging aid): window and display events, as SDL reports them.
+      static const bool trace = [] {
+        const char* const value = std::getenv("FAF_SHELL_TRACE_INPUT");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+      }();
+      if (trace && ((type >= SDL_EVENT_WINDOW_FIRST && type <= SDL_EVENT_WINDOW_LAST) ||
+                    (type >= SDL_EVENT_DISPLAY_FIRST && type <= SDL_EVENT_DISPLAY_LAST) || type == SDL_EVENT_QUIT)) {
+        std::fprintf(stderr, "[shell-event] SDL event 0x%x data1=%d data2=%d\n", static_cast<unsigned>(type),
+                     static_cast<int>(event.window.data1), static_cast<int>(event.window.data2));
       }
       if (type >= SDL_EVENT_WINDOW_FIRST && type <= SDL_EVENT_WINDOW_LAST) {
         TranslateWindowEvent(event.window, type);

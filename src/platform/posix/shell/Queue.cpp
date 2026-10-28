@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 
 namespace faf_posix::shell
 {
@@ -64,6 +66,41 @@ namespace faf_posix::shell
           }
         }
         return nullptr;
+      }
+
+      // FAF_SHELL_TRACE_INPUT=1 (debugging aid, off by default): every key, character and
+      // mouse-button message taken from the queue is written to stderr.
+      void TraceInput(const MSG& message) noexcept
+      {
+        static const bool trace = [] {
+          const char* const value = std::getenv("FAF_SHELL_TRACE_INPUT");
+          return value != nullptr && value[0] != '\0' && value[0] != '0';
+        }();
+        if (!trace) {
+          return;
+        }
+        const UINT m = message.message;
+        const char* name = nullptr;
+        switch (m) {
+          case WM_KEYDOWN: name = "WM_KEYDOWN"; break;
+          case WM_KEYUP: name = "WM_KEYUP"; break;
+          case WM_SYSKEYDOWN: name = "WM_SYSKEYDOWN"; break;
+          case WM_SYSKEYUP: name = "WM_SYSKEYUP"; break;
+          case WM_CHAR: name = "WM_CHAR"; break;
+          case WM_SYSCHAR: name = "WM_SYSCHAR"; break;
+          case WM_LBUTTONDOWN: name = "WM_LBUTTONDOWN"; break;
+          case WM_LBUTTONUP: name = "WM_LBUTTONUP"; break;
+          case WM_RBUTTONDOWN: name = "WM_RBUTTONDOWN"; break;
+          case WM_RBUTTONUP: name = "WM_RBUTTONUP"; break;
+          case WM_MBUTTONDOWN: name = "WM_MBUTTONDOWN"; break;
+          case WM_MBUTTONUP: name = "WM_MBUTTONUP"; break;
+          case WM_SYSCOMMAND: name = "WM_SYSCOMMAND"; break;
+          default: return;
+        }
+        std::fprintf(stderr, "[shell-input] %s hwnd=%p wParam=0x%llx lParam=0x%llx pt=(%d,%d)\n", name,
+                     static_cast<void*>(message.hwnd), static_cast<unsigned long long>(message.wParam),
+                     static_cast<unsigned long long>(message.lParam), static_cast<int>(message.pt.x),
+                     static_cast<int>(message.pt.y));
       }
 
       bool TakeQueued(MSG* out, HWND window, UINT first, UINT last, bool remove) noexcept
@@ -183,6 +220,7 @@ namespace faf_posix::shell
           s.lastMessageTime = message.time;
           s.lastMessagePos = message.pt;
           NoteMessageRemoved(message);
+          TraceInput(message);
           if (IsMouseMessage(message.message) && message.hwnd != nullptr &&
               (message.message == WM_MOUSEMOVE || message.message == WM_LBUTTONDOWN || message.message == WM_RBUTTONDOWN ||
                message.message == WM_MBUTTONDOWN || message.message == WM_XBUTTONDOWN || message.message == WM_LBUTTONDBLCLK ||

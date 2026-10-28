@@ -266,6 +266,11 @@ namespace faf_posix::shell
     (void)SDL_PushEvent(&event);
   }
 
+  void SetTestShotHandler(const TestShotHandler handler) noexcept
+  {
+    detail::TestInputSetShotHandler(handler);
+  }
+
   HANDLE QueueEvent() noexcept
   {
     return S().queueEvent;

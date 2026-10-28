@@ -1,0 +1,34 @@
+# Front-end play-test: main menu -> Multiplayer LAN -> Create (host) -> the FAF lobby (the
+# CPU benchmark runs) -> leave -> back to the main menu. 1280x800 pixel window.
+@90
+shot main-menu
+@100
+click 640 385            # Multiplayer LAN
+@300
+shot lan-screen
+click 965 713            # Create
+@450
+click 640 371            # Game Name
+text MacLAN
++20
+shot create-dialog
+click 537 490            # OK
+@700
+click 1118 74            # close the changelog
++30
+shot lobby-1
+@1100
+shot lobby-2
+@1700
+shot lobby-3             # the CPU benchmark has had ten seconds
+click 237 757            # Back (leave the lobby)
++60
+shot exit-lobby-dialog
+click 489 421            # "Exit game lobby?" Yes
++120
+shot lan-screen-again
+click 266 711            # Back
++120
+shot main-menu-again
++300
+shot main-menu-idle

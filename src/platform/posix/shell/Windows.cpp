@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace faf_posix::shell
@@ -196,6 +197,16 @@ namespace faf_posix::shell
       // (CScApp: WS_POPUP at the head's resolution). A borderless top-level window that covers
       // its whole monitor is put in desktop full screen, and taken out when it no longer
       // covers it; windows with a caption are left alone.
+      // FAF_SHELL_TRACE_INPUT=1 (debugging aid): full-screen decisions go to stderr too.
+      bool TraceEnabled() noexcept
+      {
+        static const bool trace = [] {
+          const char* const value = std::getenv("FAF_SHELL_TRACE_INPUT");
+          return value != nullptr && value[0] != '\0' && value[0] != '0';
+        }();
+        return trace;
+      }
+
       void ApplyFullScreen(HWND window) noexcept
       {
         SDL_Window* sdl = nullptr;
@@ -224,6 +235,10 @@ namespace faf_posix::shell
                    (frame.bottom - frame.top) >= (monitor.rcMonitor.bottom - monitor.rcMonitor.top);
         }
         const bool fullScreen = (SDL_GetWindowFlags(sdl) & SDL_WINDOW_FULLSCREEN) != 0;
+        if (TraceEnabled()) {
+          std::fprintf(stderr, "[shell-window] ApplyFullScreen %p borderless=%d covers=%d fullscreen=%d ours=%d\n",
+                       static_cast<void*>(window), borderless ? 1 : 0, covers ? 1 : 0, fullScreen ? 1 : 0, ours ? 1 : 0);
+        }
         if (covers && !fullScreen) {
           SDL_SetWindowFullscreen(sdl, true);
           ours = true;

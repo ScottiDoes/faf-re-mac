@@ -1,0 +1,29 @@
+# Front-end play-test: main menu -> Replay -> the newest replay (LastGame, written by the
+# skirmish scenario) -> watch it -> in-game menu -> back to the main menu.
+@100
+click 640 449            # Replay
+@300
+shot replay-list
+click 365 265            # LastGame
++20
+click 678 645            # Ok
+@900
+shot replay-playing
+@1500
+shot replay-later
+tap F10
++60
+shot replay-menu
+click 640 511            # End Replay
++60
+shot quit-dialog
+click 489 421            # Yes
++180
+shot after-replay
+click 678 712            # Continue (score screen)
++180
+shot main-menu-again
+click 640 705            # Exit
++60
+click 489 421            # Yes: the game quits (status 0)
++600

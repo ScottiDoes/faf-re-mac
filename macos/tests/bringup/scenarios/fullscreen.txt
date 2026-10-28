@@ -1,0 +1,18 @@
+# Borderless full screen: the game's own frame at the display's pixel size (SIZE=prefs,
+# primary_adapter 6016,3384,60 on this 3008x1692-point Retina display), which the shell puts
+# into macOS desktop full screen; then Options -> Primary Adapter -> Windowed -> Apply (a
+# captioned window), and back.
+env SIZE=prefs
+template /Users/scottharris/Gaming/faf-re/build/m4-frontend-tests/template-fullscreen.prefs
+@120
+shot fullscreen-menu
+click 3008 641           # Options (the menu is pixel-sized: small, top centre)
+@300
+click 3093 1484          # Video tab
+@380
+click 3173 1531          # Primary Adapter: cycles to the next state
++30
+shot adapter-toggled
+click 3255 1931          # Apply
+@600
+shot after-apply

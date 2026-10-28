@@ -1062,6 +1062,9 @@ HHOOK SetWindowsHookExW(int idHook, HOOKPROC lpfn, HINSTANCE hmod, DWORD dwThrea
   if (lpfn == nullptr) {
     return nullptr;
   }
+  // Windows' one caller (WinApp.cpp, WH_KEYBOARD_LL) suppresses the Windows key in full
+  // screen; macOS has no counterpart (the Command key opens no menu over a game).
+  FAF_POSIX_STUB("SetWindowsHookExW: hooks are accepted and never called");
   // A distinct non-null handle per hook type; the hook is never called.
   return reinterpret_cast<HHOOK>(static_cast<std::uintptr_t>(0x00020000u + static_cast<unsigned>(idHook)));
 }

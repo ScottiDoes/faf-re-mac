@@ -165,6 +165,7 @@ namespace faf_posix::shell::detail
   void TestInputInit() noexcept;                   // Init(): reads the script
   void TestInputFrame() noexcept;                  // a WM_PAINT was taken: runs due steps
   bool TestInputActive() noexcept;
+  void TestInputSetShotHandler(TestShotHandler handler) noexcept;
   bool TestInputDrops(const SDL_Event& event) noexcept; // real input while a script runs
   void GlobalMouse(float* x, float* y) noexcept;   // the pointer in global points (virtual in tests)
   bool TestInputWarp(float x, float y) noexcept;   // SetCursorPos in tests: moves the virtual pointer

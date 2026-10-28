@@ -43,9 +43,11 @@
 #include "legacy/containers/Vector.h"
 #include "moho/app/CScApp.h"
 #include "moho/app/WinApp.h"
+#include "moho/console/CConCommand.h"
 #include "moho/misc/StartupHelpers.h"
 #include "platform/posix/crt/SelfTest.h"
 #include "platform/posix/shell/Shell.h"
+#include "platform/posix/shell/ShellInternal.h"
 
 namespace
 {
@@ -139,6 +141,11 @@ int main(int argc, char** argv)
     std::fprintf(stderr, "faf_game: the window system did not start (see the messages above)\n");
     LeaveProcess(1);
   }
+  // Synthetic test input's "shot" step (FAF_SHELL_TEST_INPUT; off unless that is set): the
+  // engine's own frame dump of the next rendered frame.
+  faf_posix::shell::SetTestShotHandler([](const char* const directory) {
+    moho::CON_Executef("dump_Frame %s", directory);
+  });
 
   if (!faf_posixRunSelfTests(false)) {
     if (!HasSwitch("/skipselftest")) {

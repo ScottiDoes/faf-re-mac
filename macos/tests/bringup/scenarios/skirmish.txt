@@ -1,0 +1,123 @@
+# Front-end play-test (macos/porting/frontend.md): main menu -> Skirmish -> Theta Passage
+# against one AI (Easy) -> about two minutes in game -> in-game menu -> back to the main menu.
+# Window: 1280x800 pixels (playtest.py's default SIZE); coordinates are client pixels.
+# Run: python3 -I macos/tests/bringup/playtest.py macos/tests/bringup/scenarios/skirmish.txt
+@90
+shot main-menu
+@100
+click 640 320            # Skirmish
+@200
+click 790 457            # first-time prompt "play the tutorial?": No
+@400
+click 1118 74            # close the changelog
+@500
+click 400 144            # slot 2: open the dropdown
+@560
+click 324 204            # AI: Easy
+@640
+click 1093 707           # Options (game options and map)
+@800
+click 645 305            # map name filter
+text Theta
+@900
+click 548 392            # Theta Passage
+@960
+click 852 713            # OK
+@1030
+shot lobby
+@1040
+click 640 750            # Launch Game
+@1300
+shot loading
+@1900
+shot game-start
+@2000
+click 640 398            # select the ACU
++30
+shot acu-selected
+click 575 715            # build: land factory
++10
+move 500 280
++5
+move 420 250             # a free spot up and left of the ACU (the ghost follows)
++20
+click 420 250            # place it
++30
+shot factory-ordered
+key Left Shift down      # Shift: queue two more
++4
+click 575 715
++10
+move 420 560
++20
+click 420 560
++10
+move 860 560
++20
+click 860 560
++10
+key Left Shift up
++30
+shot queued
+tap 1 Ctrl               # Ctrl+1: the ACU becomes group 1
++20
+tap Escape               # deselect
++20
+shot deselected
+tap 1                    # group 1: the ACU again
++20
+shot group1
+wheel 640 400 -5         # zoom out
++90
+shot zoomed-out
+drag 640 400 560 360 2 10    # middle drag, relative motion: the terrain follows the pointer
++30
+shot middle-drag
+key Up down              # pan north
++40
+key Up up
++30
+shot pan-up
+tap F1                   # key bindings screen
++60
+shot f1
+click 993 733            # its Close button
++30
+tap Return               # chat
++20
+text gl hf
++20
+shot chat
+tap Return               # send
++40
+shot chat-sent
+tap Escape               # close the chat (its edit box has the keyboard until then)
++30
+tap 1                    # group 1 again, and centre on it (double tap)
++4
+tap 1
++60
+shot group1-centred
+@5000
+shot mid-game
+@8400
+shot two-minutes
+tap F10                  # the in-game main menu
++60
+shot game-menu
+click 640 581            # End Game
++60
+shot quit-dialog
+click 489 421            # "Are you sure you'd like to quit?" Yes
++180
+shot score-screen
+click 678 712            # Continue
++120
+shot back-at-menu
++300
+shot menu-idle           # still drawing at 60 fps with no input (F1)
+click 640 705            # Exit
++60
+shot exit-dialog
+click 489 421            # "Are you sure you'd like to exit?" Yes: the game quits (status 0)
++600
