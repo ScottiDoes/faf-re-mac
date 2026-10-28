@@ -13,8 +13,8 @@ Python 3.9 standard library only; run with `python3 -I`.
       <applied-beats> sim beats (the runner's checked= for that run; a cross-check).
   convert <in.fafreplay> <out.scfareplay> [--meta <out.json>]
       FAF vault/client replay -> the .scfareplay the engine's /replay reads. A .fafreplay is one
-      JSON line, then base64 of (4-byte big-endian length + zlib stream). The newer zstd form
-      cannot be read with the standard library: the tool says so and exits 2. --meta writes
+      JSON line, then base64 of (4-byte big-endian length + zlib stream), or (version 2, the
+      vault's form today) one zstd frame of the raw replay, decoded by zstd_decode.py. --meta writes
       the JSON header (featured_mod, mapname, num_players, ...) next to the output.
   corrupt <in.scfareplay> <out.scfareplay> <beat> [--byte K] [--json]
       Negative control: a copy with digest byte K (default 0) flipped in every checksum record
@@ -50,6 +50,7 @@ file it cannot read.
 import argparse
 import base64
 import json
+import os
 import re
 import struct
 import sys
@@ -277,13 +278,21 @@ def cmd_convert(args):
     header = json.loads(raw[:newline])
     body = raw[newline + 1:]
     if header.get("compression") == "zstd" or body[:4] == b"\x28\xb5\x2f\xfd":
-        raise ReplayError("%s is zstd-compressed; the standard library cannot read it "
-                          "(convert it with scripts/perf/convert_replay.py where `zstandard` is installed)" % args.src)
-    blob = base64.b64decode(body)
-    expected = struct.unpack(">I", blob[:4])[0]
-    data = zlib.decompress(blob[4:])
-    if len(data) != expected:
-        raise ReplayError("%s: %d bytes decompressed, the header says %d" % (args.src, len(data), expected))
+        # Version-2 replays (FAF's vault today): the body is one zstd frame of the raw replay.
+        # The standard library has no zstd: zstd_decode.py next to this file decodes it and
+        # checks the frame's content checksum. (python3 -I leaves this folder off sys.path.)
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import zstd_decode
+        try:
+            data = zstd_decode.decompress(body)
+        except zstd_decode.ZstdError as error:
+            raise ReplayError("%s: zstd: %s" % (args.src, error))
+    else:
+        blob = base64.b64decode(body)
+        expected = struct.unpack(">I", blob[:4])[0]
+        data = zlib.decompress(blob[4:])
+        if len(data) != expected:
+            raise ReplayError("%s: %d bytes decompressed, the header says %d" % (args.src, len(data), expected))
     info = parse(data)  # refuses anything that is not a replay
     with open(args.dst, "wb") as out:
         out.write(data)
