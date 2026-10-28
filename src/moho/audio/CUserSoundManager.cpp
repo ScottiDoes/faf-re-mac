@@ -1412,6 +1412,32 @@ namespace moho
     const int pendingDestroyCount = DrainFinishedPendingCues(mPendingDestroyCues, mVoiceEngine.get());
     EnsureSoundCounterStat(gEngineStatSoundPendingDestroy, "Sound_PendingDestroy");
     StoreSoundCounter(gEngineStatSoundPendingDestroy, pendingDestroyCount);
+
+#if defined(FAF_POSIX)
+    // macOS addition: free the cue of a finished script sound (Lua PlaySound, ScriptPlaySound).
+    // The handle keeps its cue until ScriptStopSound, and HSound's destructor (0x004E1120) never
+    // destroys it, so a UI sound whose handle Lua drops (rollovers, clicks, selection sounds)
+    // keeps its cue for the rest of the game: hundreds of finished cues an hour in a played
+    // game. Cheap for XACT, but FACT walks every cue it holds under its API lock every 10 ms.
+    // The handle stays valid without a cue: WaitFor reports it finished, StopSound and
+    // StartSound do nothing. A ducking sound (PlayVoice) is left alone, because its
+    // ScriptStopSound pops the duck only while the handle still holds its cue.
+    {
+      auto* const sentinel = reinterpret_cast<LoopNode*>(&mActiveLoops);
+      for (LoopNode* node = mActiveLoops.mNext; node != sentinel; node = node->mNext) {
+        HSound* const sound = LoopOwnerFromNode(node);
+        IXACTCue* const cue = ReadSoundLoopCue(*sound);
+        if (cue == nullptr || ReadSoundAffectsDuckingFlag(*sound) != 0u) {
+          continue;
+        }
+        std::int32_t cueState = 0;
+        if (cue->GetState(&cueState) >= 0 && cueState == kCueStateStopped) {
+          cue->Destroy();
+          (void)WriteSoundLoopCue(sound, nullptr);
+        }
+      }
+    }
+#endif
   }
 
   /**
