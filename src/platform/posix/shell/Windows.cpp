@@ -13,6 +13,7 @@
 // runs.
 
 #include "platform/posix/shell/ShellState.h"
+#include "platform/posix/shell/Panel.h"
 
 #include <unistd.h>
 
@@ -134,13 +135,23 @@ namespace faf_posix::shell
         return display != 0 ? display : SDL_GetPrimaryDisplay();
       }
 
+      // Pixels per point on a display: panel pixels by default (Panel.h).
       float DisplayDensity(SDL_DisplayID display) noexcept
       {
-        if (!S().highDensity) {
-          return 1.0f;
-        }
-        const SDL_DisplayMode* const mode = SDL_GetDesktopDisplayMode(display);
-        return mode != nullptr && mode->pixel_density > 0.0f ? mode->pixel_density : 1.0f;
+        return DisplayScale(display);
+      }
+
+      // A window's client size in pixels: its size in points at its display's scale (not
+      // the backing store's size, which is a panel's size only on an unscaled desktop).
+      void ClientPixels(SDL_Window* sdl, int* width, int* height) noexcept
+      {
+        int w = 0;
+        int h = 0;
+        SDL_GetWindowSize(sdl, &w, &h);
+        const SDL_DisplayID display = SDL_GetDisplayForWindow(sdl);
+        const float scale = display != 0 ? DisplayScale(display) : S().screenScale;
+        *width = std::max(1, static_cast<int>(std::lround(w * scale)));
+        *height = std::max(1, static_cast<int>(std::lround(h * scale)));
       }
 
       void ApplyTopLevelStyle(WindowRecord* top) noexcept
@@ -192,15 +203,19 @@ namespace faf_posix::shell
         }
       }
 
-      // The game's "fullscreen" frame is a borderless window the size of the display mode
-      // (CScApp: WS_POPUP at the head's resolution). A borderless top-level window that covers
-      // its whole monitor is put in desktop full screen, and taken out when it no longer
-      // covers it; windows with a caption are left alone.
+      // The game's "fullscreen" frame is a borderless window at the head's resolution
+      // (CScApp: WS_POPUP). One of the size SetFullscreenMode asked for goes into exclusive
+      // full screen at that display mode (Panel.cpp: the display switches to it, so every game
+      // pixel is a mode pixel); a borderless top-level window that covers its whole monitor
+      // otherwise goes into desktop full screen. Either is undone when the window no longer
+      // qualifies; windows with a caption are left alone.
       void ApplyFullScreen(HWND window) noexcept
       {
         SDL_Window* sdl = nullptr;
         bool borderless = false;
         bool ours = false;
+        int clientWidth = 0;
+        int clientHeight = 0;
         {
           std::lock_guard<std::recursive_mutex> guard(S().lock);
           WindowRecord* const top = Find(window);
@@ -210,9 +225,20 @@ namespace faf_posix::shell
           sdl = top->sdl;
           borderless = (top->style & WS_CAPTION) != WS_CAPTION;
           ours = top->shellFullScreen;
+          clientWidth = top->clientWidth;
+          clientHeight = top->clientHeight;
         }
-        bool covers = false;
-        if (borderless) {
+        const SDL_DisplayMode* exclusive = nullptr;
+        int wantWidth = 0;
+        int wantHeight = 0;
+        int wantRefresh = 0;
+        // A point or two of rounding on a scaled desktop (sizes go through points).
+        if (borderless && PendingFullscreenMode(wantWidth, wantHeight, wantRefresh) &&
+            std::abs(clientWidth - wantWidth) <= 2 && std::abs(clientHeight - wantHeight) <= 2) {
+          exclusive = ExclusiveMode(SDL_GetDisplayForWindow(sdl), wantWidth, wantHeight, wantRefresh);
+        }
+        bool covers = exclusive != nullptr;
+        if (borderless && !covers) {
           RECT frame{};
           MONITORINFO monitor{};
           monitor.cbSize = sizeof(monitor);
@@ -224,11 +250,26 @@ namespace faf_posix::shell
                    (frame.bottom - frame.top) >= (monitor.rcMonitor.bottom - monitor.rcMonitor.top);
         }
         const bool fullScreen = (SDL_GetWindowFlags(sdl) & SDL_WINDOW_FULLSCREEN) != 0;
-        if (covers && !fullScreen) {
-          SDL_SetWindowFullscreen(sdl, true);
+        const SDL_DisplayMode* const current = SDL_GetWindowFullscreenMode(sdl);
+        const bool sameMode = (current == nullptr && exclusive == nullptr) ||
+                              (current != nullptr && exclusive != nullptr && current->w == exclusive->w &&
+                               current->h == exclusive->h && current->refresh_rate == exclusive->refresh_rate);
+        if (covers && (!fullScreen || !sameMode)) {
+          if (!sameMode) {
+            SDL_SetWindowFullscreenMode(sdl, exclusive); // null: desktop full screen
+          }
+          if (!fullScreen) {
+            SDL_SetWindowFullscreen(sdl, true);
+          }
+          if (exclusive != nullptr) {
+            std::fprintf(stderr, "[shell] full screen at %dx%d %.0f Hz (exclusive display mode)\n", exclusive->w, exclusive->h,
+                         exclusive->refresh_rate);
+          }
           ours = true;
         } else if (!covers && fullScreen && ours) {
-          SDL_SetWindowFullscreen(sdl, false); // a window the shell put there, and only that
+          // A window the shell put there, and only that; the display gets its desktop mode back.
+          SDL_SetWindowFullscreenMode(sdl, nullptr);
+          SDL_SetWindowFullscreen(sdl, false);
           ours = false;
         }
         std::lock_guard<std::recursive_mutex> guard(S().lock);
@@ -283,12 +324,11 @@ namespace faf_posix::shell
     float DensityOf(const WindowRecord* top) noexcept
     {
       if (top != nullptr && top->sdl != nullptr) {
-        const float density = SDL_GetWindowPixelDensity(top->sdl);
-        if (density > 0.0f) {
-          return density;
+        if (const SDL_DisplayID display = SDL_GetDisplayForWindow(top->sdl); display != 0) {
+          return DisplayScale(display);
         }
       }
-      return S().highDensity ? S().screenScale : 1.0f;
+      return S().screenScale;
     }
 
     LRESULT Send(HWND window, UINT message, WPARAM wParam, LPARAM lParam) noexcept
@@ -403,7 +443,7 @@ namespace faf_posix::shell
         maximized = (flags & SDL_WINDOW_MAXIMIZED) != 0 || (captioned && (flags & SDL_WINDOW_FULLSCREEN) != 0);
         int x = 0;
         int y = 0;
-        SDL_GetWindowSizeInPixels(top->sdl, &width, &height);
+        ClientPixels(top->sdl, &width, &height);
         SDL_GetWindowPosition(top->sdl, &x, &y);
         stateChanged = minimized != top->minimized || maximized != top->maximized;
         resized = !minimized && (width != top->clientWidth || height != top->clientHeight);
@@ -691,7 +731,7 @@ namespace faf_posix::shell
           record->sdlId = SDL_GetWindowID(sdl);
           s.bySdl[record->sdlId] = handle;
           s.topLevels.push_back(handle);
-          SDL_GetWindowSizeInPixels(sdl, &record->clientWidth, &record->clientHeight);
+          ClientPixels(sdl, &record->clientWidth, &record->clientHeight);
           SDL_GetWindowPosition(sdl, &record->screenX, &record->screenY);
           // The density may differ from the display's guess (a window SDL placed elsewhere).
           if (nWidth != CW_USEDEFAULT) {
@@ -700,7 +740,7 @@ namespace faf_posix::shell
             const float actual = DensityOf(record.get());
             if (std::abs(actual - density) > 0.01f) {
               SDL_SetWindowSize(sdl, std::max<LONG>(1, Round(wantW / actual)), std::max<LONG>(1, Round(wantH / actual)));
-              SDL_GetWindowSizeInPixels(sdl, &record->clientWidth, &record->clientHeight);
+              ClientPixels(sdl, &record->clientWidth, &record->clientHeight);
             }
           }
           showTopLevel = (dwStyle & WS_VISIBLE) != 0;

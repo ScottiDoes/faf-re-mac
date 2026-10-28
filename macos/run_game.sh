@@ -15,9 +15,11 @@
 #                      (init_bench.lua + /benchspeed <n>); default: the replay's own speed
 #   INIT               init file, absolute or in the run folder (default init_faf.lua;
 #                      init_bench.lua with SPEED)
-#   SIZE="<w> <h>"     window client size in pixels (/windowed w h; default "2560 1600", which
-#                      is 1280x800 points on a Retina display). SIZE=prefs: the game's own
-#                      choice from Game.prefs (primary_adapter; default 1024x768 borderless)
+#   SIZE="<w> <h>"     a window of this client size in the display panel's pixels (/windowed w h;
+#                      half of a 4K panel is "1920 1080"). Default: the game's own choice
+#                      from Game.prefs (primary_adapter): a resolution is exclusive full
+#                      screen at that display mode, the panel's native one by default;
+#                      "windowed" is the saved window size
 #   PREFS=<name>       preferences file in ~/Library/Application Support/Gas Powered Games/
 #                      Supreme Commander Forged Alliance (/prefs <name>; default Game.prefs).
 #                      bringup-high.prefs there has the bring-up's high-fidelity profile
@@ -33,7 +35,7 @@
 #                      separated list of frame numbers ("600,1200"; 60 frames a second with
 #                      vsync); PNGs in $OUT/shots
 #   ECHO=1             also print the engine log to stderr as it is written
-# Every other environment variable passes through (FAF_SHELL_HIGHDPI=0 for one pixel per point,
+# Every other environment variable passes through (FAF_SHELL_HIGHDPI=1 for backing-store pixels, =0 for points,
 # FAF_SHADER_CACHE_DIR, VK_* ...).
 # Exit status: the game's (0 normal quit), 124 when TIME ran out.
 set -u
@@ -48,7 +50,7 @@ OUT=${OUT:A}
 LOG=${LOG:-$OUT/game.log}
 LOG=${LOG:A}
 TIME=${TIME:-0}
-SIZE=${SIZE:-2560 1600}
+SIZE=${SIZE:-prefs}
 
 fail() { print -u2 "run_game: $*"; exit 2 }
 [[ -x $EXE ]] || fail "no game at $EXE (ninja -C build/macos faf_game)"

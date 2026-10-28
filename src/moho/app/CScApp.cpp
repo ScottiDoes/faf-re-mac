@@ -50,6 +50,9 @@
 #include "moho/task/CTaskThread.h"
 #include "moho/ui/IUIManager.h"
 #include "moho/ui/UiWorldShapes.h"
+#if defined(FAF_POSIX)
+#include "platform/posix/shell/Shell.h"
+#endif
 
 namespace gpg
 {
@@ -1497,6 +1500,25 @@ bool CScApp::CreateDevice()
     }
   }
 
+#if defined(FAF_POSIX)
+  // macOS: a borderless head (a primary_adapter resolution, /fullscreen) is exclusive full
+  // screen at a real display mode - the request when the display has it, else the panel's
+  // native resolution, FA's default 1024,768,60 included - and sizes are the panel's pixels
+  // (platform/posix/shell/Shell.h). A windowed head cancels an earlier request.
+  if (primaryHead.mWindowed) {
+    int width = static_cast<int>(primaryHead.mWidth);
+    int height = static_cast<int>(primaryHead.mHeight);
+    int refreshRate = static_cast<int>(primaryHead.framesPerSecond);
+    if (faf_posix::shell::ResolveFullscreenMode(width, height, refreshRate)) {
+      primaryHead.mWidth = static_cast<std::uint32_t>(width);
+      primaryHead.mHeight = static_cast<std::uint32_t>(height);
+      primaryHead.framesPerSecond = static_cast<std::uint32_t>(refreshRate);
+    }
+    faf_posix::shell::SetFullscreenMode(width, height, refreshRate);
+  } else {
+    faf_posix::shell::SetFullscreenMode(0, 0, 0);
+  }
+#endif
   if (context.GetHeadCount() == 1 &&
       moho::CFG_GetArgOptionAliases(moho::CFG_GetAdapterOptionAliases(), 1, &options) &&
       !options.empty()) {
