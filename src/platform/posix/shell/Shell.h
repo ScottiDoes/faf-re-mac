@@ -72,4 +72,9 @@ namespace faf_posix::shell
   // on the real panel. FAF lays a UI out once: a mode switch shows at the next load. 1 before
   // Init().
   [[nodiscard]] float UiScaleCorrection() noexcept;
+
+  // What UiScaleCorrection() last returned (1 before its first call), without asking the
+  // display again: the correction the UI is laid out with, cheap enough to read every frame
+  // from any thread (the engine-drawn debug overlays, SimDriver.cpp REN_DebugTextScale).
+  [[nodiscard]] float LastUiScaleCorrection() noexcept;
 } // namespace faf_posix::shell

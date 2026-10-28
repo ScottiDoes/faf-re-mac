@@ -16,6 +16,7 @@
 #include <CoreGraphics/CoreGraphics.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -29,6 +30,9 @@ namespace faf_posix::shell
 {
   namespace
   {
+    // UiScaleCorrection's last result (LastUiScaleCorrection).
+    std::atomic<float> gLastUiScaleCorrection{1.0f};
+
     struct FullscreenEntry
     {
       int width = 0;
@@ -271,34 +275,49 @@ namespace faf_posix::shell
     return true;
   }
 
-  float UiScaleCorrection() noexcept
+  namespace
   {
-    if (!IsActive()) {
-      return 1.0f;
-    }
-    // The display of the game's window (the first visible top-level one), else the main one.
-    SDL_DisplayID display = 0;
+    float ComputeUiScaleCorrection() noexcept
     {
-      std::lock_guard<std::recursive_mutex> guard(detail::S().lock);
-      for (const HWND handle : detail::S().topLevels) {
-        const detail::WindowRecord* const top = detail::Find(handle);
-        if (top != nullptr && top->sdl != nullptr && top->visible) {
-          display = SDL_GetDisplayForWindow(top->sdl);
-          break;
+      if (!IsActive()) {
+        return 1.0f;
+      }
+      // The display of the game's window (the first visible top-level one), else the main one.
+      SDL_DisplayID display = 0;
+      {
+        std::lock_guard<std::recursive_mutex> guard(detail::S().lock);
+        for (const HWND handle : detail::S().topLevels) {
+          const detail::WindowRecord* const top = detail::Find(handle);
+          if (top != nullptr && top->sdl != nullptr && top->visible) {
+            display = SDL_GetDisplayForWindow(top->sdl);
+            break;
+          }
         }
       }
+      if (display == 0) {
+        display = SDL_GetPrimaryDisplay();
+      }
+      const SDL_DisplayMode* const current = SDL_GetCurrentDisplayMode(display);
+      int nativeWidth = 0;
+      int nativeHeight = 0;
+      if (current == nullptr || current->w <= 0 || !detail::NativePixels(display, nativeWidth, nativeHeight)) {
+        return 1.0f;
+      }
+      const float backingWidth = current->w * (current->pixel_density > 0.0f ? current->pixel_density : 1.0f);
+      return std::max(1.0f, backingWidth / static_cast<float>(nativeWidth));
     }
-    if (display == 0) {
-      display = SDL_GetPrimaryDisplay();
-    }
-    const SDL_DisplayMode* const current = SDL_GetCurrentDisplayMode(display);
-    int nativeWidth = 0;
-    int nativeHeight = 0;
-    if (current == nullptr || current->w <= 0 || !detail::NativePixels(display, nativeWidth, nativeHeight)) {
-      return 1.0f;
-    }
-    const float backingWidth = current->w * (current->pixel_density > 0.0f ? current->pixel_density : 1.0f);
-    return std::max(1.0f, backingWidth / static_cast<float>(nativeWidth));
+  } // namespace
+
+  float UiScaleCorrection() noexcept
+  {
+    const float correction = ComputeUiScaleCorrection();
+    gLastUiScaleCorrection.store(correction, std::memory_order_relaxed);
+    return correction;
+  }
+
+  float LastUiScaleCorrection() noexcept
+  {
+    return gLastUiScaleCorrection.load(std::memory_order_relaxed);
   }
 
   void SetFullscreenMode(const int width, const int height, const int refreshRate) noexcept

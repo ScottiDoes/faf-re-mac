@@ -576,7 +576,10 @@ namespace moho
     primBatcher->SetTexture(whiteTexture);
     DrawPanelRect(*primBatcher, left, top, right, bottom, 0xFFFFFFFFu);
 
-    boost::SharedPtrRaw<CD3DFont> rawFont = CD3DFont::Create(kFontPointSize, kFontFaceName);
+    // [DELIBERATE-FIX] Retail labels the bars at a fixed 10pt; the size follows the UI scale
+    // (REN_DebugTextScale) and the track layout measures the font, so the rows grow with it.
+    const int fontPoints = std::max(1, static_cast<int>(std::lround(kFontPointSize * REN_DebugTextScale())));
+    boost::SharedPtrRaw<CD3DFont> rawFont = CD3DFont::Create(fontPoints, kFontFaceName);
     const boost::shared_ptr<CD3DFont> font = boost::SharedPtrFromRawRetained(rawFont);
     rawFont.release();
 

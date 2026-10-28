@@ -2597,7 +2597,10 @@ namespace
     const int graphBottomY = graphHalfHeight + graphHeightBase;
 
     // 0x007F411A..0x007F413C: retained 10pt Courier New font handle.
-    boost::SharedPtrRaw<CD3DFont> rawFont = CD3DFont::Create(10, "Courier New");
+    // [DELIBERATE-FIX] The size follows the UI scale (REN_DebugTextScale); the extents
+    // below come from the font's metrics.
+    const int fontPoints = std::max(1, static_cast<int>(std::lround(10.0f * moho::REN_DebugTextScale())));
+    boost::SharedPtrRaw<CD3DFont> rawFont = CD3DFont::Create(fontPoints, "Courier New");
     CD3DFont* const font = rawFont.px;
 
     // 0x007F414F..0x007F41B8: vertical extents from font metrics (ceil + 1).

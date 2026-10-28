@@ -44,6 +44,10 @@
 #include "moho/misc/LaunchInfoBase.h"
 #include "Sim.h"
 
+#if defined(FAF_POSIX)
+#include "platform/posix/shell/Shell.h"
+#endif
+
 using namespace moho;
 
 namespace
@@ -1840,23 +1844,23 @@ void CSimDriver::RequestSaveGame(CSaveGameRequestImpl* request)
   ++mOutstandingRequests;
 }
 
-namespace
+/// The current profile's ui_scale option (what FAF's options menu writes),
+/// 1.0 when it is unset or not a number (TimeBar.h).
+float moho::REN_DebugTextScale()
 {
-  /// The current profile's ui_scale option (what FAF's options menu writes),
-  /// 1.0 when it is unset or not a number.
-  [[nodiscard]] float CurrentUiScale()
-  {
-    IUserPrefs* const prefs = USER_GetPreferences();
-    if (prefs == nullptr) {
-      return 1.0f;
-    }
+  float scale = 1.0f;
+  if (IUserPrefs* const prefs = USER_GetPreferences(); prefs != nullptr) {
     const LuaPlus::LuaObject value = prefs->LookupCurrentOption("ui_scale");
-    if (!value.IsNumber()) {
-      return 1.0f;
+    if (value.IsNumber()) {
+      scale = static_cast<float>(value.GetNumber());
     }
-    return std::clamp(static_cast<float>(value.GetNumber()), 0.5f, 4.0f);
   }
-} // namespace
+#if defined(FAF_POSIX)
+  // macOS: FAF's layout scale is UI Scale times the display correction (CScApp.cpp).
+  scale *= faf_posix::shell::LastUiScaleCorrection();
+#endif
+  return std::clamp(scale, 0.5f, 4.0f);
+}
 
 /**
  * Address: 0x0073DFE0 (FUN_0073DFE0), ISTIDriver slot 39
@@ -1887,7 +1891,7 @@ void CSimDriver::DrawNetworkStats(
   // the HUD is as large as the rest of the UI; every measurement below comes
   // from the font, so the whole panel scales with it. Pass 10 to go back to
   // retail's size.
-  const int fontPoints = std::max(1, static_cast<int>(std::lround(10.0f * CurrentUiScale())));
+  const int fontPoints = std::max(1, static_cast<int>(std::lround(10.0f * REN_DebugTextScale())));
   boost::SharedPtrRaw<CD3DFont> rawFont = CD3DFont::Create(fontPoints, "Courier New");
   CD3DFont* const font = rawFont.px;
 
