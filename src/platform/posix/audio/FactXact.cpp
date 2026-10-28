@@ -27,6 +27,16 @@
 //   IXACTEngine::ShutDown). Adapters of cues whose FACT object is gone that way are kept
 //   until the engine calls IXACTCue::Destroy and report XACT_CUESTATE_STOPPED meanwhile,
 //   so a late Stop/GetState/Destroy from the engine does no harm.
+// - Cue state: XACT reports one state; FACT's is a set of flags that keeps PREPARED after
+//   the cue plays (a finished cue reads 0x24). The engine frees a finished cue only when its
+//   state equals XACT_CUESTATE_STOPPED, so GetState reports the furthest state the flags
+//   show (ToXactCueState). Raw FACT states kept every finished one-shot alive: thousands of
+//   cues an hour, each walked by FACT's update thread under its API lock every 10 ms and
+//   polled by the engine every beat, until the main thread spent the frame waiting for
+//   FACT's lock (10 FPS in a late 12-player game) and unit sounds stopped.
+// - Failed play: FACT prepares a cue before playing it and returns it even when Play
+//   fails; XACT returns none. The engine drops a cue it got with an error, so the adapter
+//   destroys FACT's and returns the error alone.
 // - Threads: FACT serialises its API with its own lock and runs its cue updates on its
 //   own thread ("FACT Thread", every 10 ms) and the mix on SDL's audio thread. The engine
 //   calls these adapters from the main thread (CUserSoundManager, SND_Frame's DoWork).
@@ -81,6 +91,34 @@ namespace
     }
     const auto code = static_cast<std::int32_t>(result);
     return code < 0 ? code : E_FAIL;
+  }
+
+  /// XACT reports a cue in exactly one state; FACT's state is a set of flags that keeps
+  /// FACT_STATE_PREPARED after the cue plays, so a finished cue reads PREPARED | STOPPED
+  /// (0x24). The engine compares the state for equality (0x20 stopped in IsStopped and the
+  /// pending-destroy drain, 0x10 stopping for entity loops) and tests 0x02 (preparing), so
+  /// a raw FACT state never frees a finished cue. Report the furthest state the flags show.
+  [[nodiscard]] std::uint32_t ToXactCueState(const std::uint32_t factState) noexcept
+  {
+    if ((factState & (FACT_STATE_STOPPED | FACT_STATE_PREPAREFAILED)) != 0u) {
+      return XACT_CUESTATE_STOPPED;
+    }
+    if ((factState & FACT_STATE_STOPPING) != 0u) {
+      return XACT_CUESTATE_STOPPING;
+    }
+    if ((factState & FACT_STATE_PAUSED) != 0u) {
+      return XACT_CUESTATE_PAUSED;
+    }
+    if ((factState & FACT_STATE_PLAYING) != 0u) {
+      return XACT_CUESTATE_PLAYING;
+    }
+    if ((factState & FACT_STATE_PREPARED) != 0u) {
+      return XACT_CUESTATE_PREPARED;
+    }
+    if ((factState & FACT_STATE_PREPARING) != 0u) {
+      return XACT_CUESTATE_PREPARING;
+    }
+    return XACT_CUESTATE_CREATED;
   }
 
   // --- Registry: FACT objects -> adapters, and the engine's callbacks ----------------
@@ -198,7 +236,7 @@ namespace
       }
       uint32_t state = 0;
       const int result = ToHresult(FACTCue_GetState(mCue, &state));
-      *outState = static_cast<std::int32_t>(state);
+      *outState = static_cast<std::int32_t>(ToXactCueState(state));
       return result;
     }
 
@@ -356,8 +394,11 @@ namespace
     if (cue == nullptr) {
       return result >= 0 ? E_FAIL : result;
     }
-    if (result < 0 && result != static_cast<int>(XACTENGINE_E_INSTANCELIMITFAILTOPLAY)) {
-      // The engine drops the cue on any other error; do not leak FACT's.
+    if (result < 0) {
+      // FACT prepares the cue before it plays it and hands it back whatever Play returns;
+      // XACT returns no cue with an error. Every engine caller drops a cue it got with an
+      // error (AudioEngine::Play's callers test `< 0`, XACTENGINE_E_INSTANCELIMITFAILTOPLAY
+      // included), so keeping FACT's would leak it.
       (void)FACTCue_Destroy(cue);
       return result;
     }

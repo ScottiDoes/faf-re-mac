@@ -179,8 +179,21 @@ This is a FAF addition. It patches xactengine2_9.dll's `QueryPerformanceCounter`
     XACT_CUESTATE_STOPPED and ignores Stop.
   - So the engine's pending-destroy lists drain instead of touching freed memory.
   - Fire-and-forget cues (no out-pointer) stay FACT-managed.
-  - A cue FACT created alongside an error other than "instance limit" is destroyed, since the
-    engine drops it.
+  - A cue FACT created alongside any error, `XACTENGINE_E_INSTANCELIMITFAILTOPLAY`
+    included, is destroyed: XACT returns no cue with an error, and every caller of
+    `AudioEngine::Play` drops a cue it got with one. (The engine's
+    `kXactErrCuePreparedOnly`, 0x8AC70008, is that instance-limit code.)
+- **Cue state:** XACT reports exactly one state. FACT's state is a set of flags that keeps
+  `FACT_STATE_PREPARED` after the cue plays, so a finished cue reads 0x24
+  (PREPARED | STOPPED). The engine's tests are equalities: 0x20 in `IsStopped` and in the
+  pending-destroy drain, 0x10 (stopping) for entity loops, plus the 0x02 (preparing) bit.
+  `FactCue::GetState` therefore reports the furthest state the flags show
+  (`ToXactCueState`: stopped, stopping, paused, playing, prepared, preparing, created).
+  - **What raw states did:** no finished one-shot was ever destroyed. FACT kept walking every
+    one of them under its API lock every 10 ms, and the engine polled every one each beat
+    (1,585 stuck cues and 318,000 `GetState` calls per 10 s after 20 s of a +10 replay). In
+    a late 12-player game the main thread spent the frame waiting for FACT's lock (10 FPS
+    with the sim at +3), and unit sounds stopped.
 - **Locking:** the registry mutex is never held while calling into FACT, because FACT calls
   the notification callback with its own API lock held.
 - **Not called by the engine:** `PrepareWave`, `PrepareInMemoryWave`,
@@ -263,8 +276,9 @@ full scale by up to +3.8 dB when played alone.
 - **In the game,** VO plays over ducked world sound. The replay capture never clipped.
 
 **FACT behaviour seen:**
-- A cue's state is exactly 0x08 (playing) or 0x20 (stopped), which is what the engine's
-  `IsStopped` / `kCueStatePlaying` equality tests expect.
+- A playing cue reads 0x08, but a finished one reads 0x24 (PREPARED | STOPPED), not 0x20.
+  This note first claimed 0x08 or 0x20 only; the short captures never checked that finished
+  cues were freed. See **Cue state** above.
 - Reads always had `OffsetHigh` = 0.
 - No streaming-invalid-content notification.
 

@@ -25,6 +25,7 @@
 namespace moho
 {
   extern float ui_StrategicIconScale; // FAF FA-Binary-Patches #147 (CWldSession.cpp)
+  float UI_IconScaleCorrection() noexcept; // CWldSession.cpp: 1, or the macOS display correction
 
   int ren_GpuIcons = -1;
   int ren_GpuIconClassify = -1;
@@ -213,12 +214,14 @@ namespace moho
       mSlotBuffer = device->CreateGpuBuffer(desc);
     }
     std::vector<SlotRecord> records(count);
+    const float iconScale = ui_StrategicIconScale * UI_IconScaleCorrection();
     for (std::uint32_t index = 0U; index < count; ++index) {
       const Slot& slot = mSlots[index];
       std::memcpy(records[index].uv, slot.mUv, sizeof(slot.mUv));
-      // FAF FA-Binary-Patches #147: the batcher path's radii times `ui_StrategicIconScale`.
-      records[index].halfSize[0] = slot.mHalfSize[0] * ui_StrategicIconScale;
-      records[index].halfSize[1] = slot.mHalfSize[1] * ui_StrategicIconScale;
+      // FAF FA-Binary-Patches #147: the batcher path's radii times `ui_StrategicIconScale`
+      // (and the macOS display correction, as there).
+      records[index].halfSize[0] = slot.mHalfSize[0] * iconScale;
+      records[index].halfSize[1] = slot.mHalfSize[1] * iconScale;
       records[index].unused[0] = 0.0f;
       records[index].unused[1] = 0.0f;
     }
@@ -226,7 +229,7 @@ namespace moho
       device->UpdateGpuBuffer(*mSlotBuffer, 0U, count, records.data());
     }
     mSlotsDirty = false;
-    mUploadedIconScale = ui_StrategicIconScale;
+    mUploadedIconScale = iconScale;
   }
 
   StrategicIconRenderer::ViewStream& StrategicIconRenderer::StreamFor(const void* const viewKey)
@@ -249,7 +252,7 @@ namespace moho
     if (!RefreshAtlasSlots(batcher)) {
       return nullptr;
     }
-    if (mSlotsDirty || mUploadedIconScale != ui_StrategicIconScale) {
+    if (mSlotsDirty || mUploadedIconScale != ui_StrategicIconScale * UI_IconScaleCorrection()) {
       UploadSlots();
     }
     // Anything the batcher still holds was submitted before the icons.

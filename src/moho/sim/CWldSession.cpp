@@ -1,5 +1,9 @@
 #include "CWldSession.h"
 
+#if defined(FAF_POSIX)
+#include "platform/posix/shell/Shell.h"
+#endif
+
 #include "platform/WxWidgets.h"
 #include <wx/app.h>
 
@@ -785,6 +789,24 @@ namespace moho
     "Size multiplier of projectile icons, textured or the plain squares (1 = the original size).",
     &ui_ProjectileIconScale
   );
+
+  /**
+   * Engine addition (macOS): the factor the three icon multipliers above are applied with.
+   * The icons are sized in render-target pixels. In a window on a scaled desktop those are
+   * backing-store pixels, finer than the panel's (1.57 per panel pixel on a 4K panel that
+   * "looks like" 3008x1692), so the icons came out smaller than the UI around them. The
+   * factor is the display correction FAF's layout is scaled by (platform/posix/shell/Shell.h
+   * LastUiScaleCorrection; 1 in a native full-screen mode), as for the debug overlays
+   * (TimeBar.h REN_DebugTextScale). FAF's options still set the multipliers. 1 elsewhere.
+   */
+  float UI_IconScaleCorrection() noexcept
+  {
+#if defined(FAF_POSIX)
+    return faf_posix::shell::LastUiScaleCorrection();
+#else
+    return 1.0f;
+#endif
+  }
 
   // Per-army team-color palette, distinct from `StrategicIconAux`'s own
   // Self/Ally/Enemy/Neutral relation colors: `RenderUnitIcon` (0x0085D9A0)
@@ -12000,8 +12022,8 @@ namespace moho
     {
       // FAF FA-Binary-Patches #147 (Scale projectile/deposit/strategic icons): radii times
       // `ui_StrategicIconScale` at all four quad sites (0x0085DCA4, 0x0085DDB6, 0x0085DEB3, 0x0085DFAF).
-      const float halfWidth = static_cast<float>(texture.mWidth >> 1) * ui_StrategicIconScale;
-      const float halfHeight = static_cast<float>(texture.mHeight >> 1) * ui_StrategicIconScale;
+      const float halfWidth = static_cast<float>(texture.mWidth >> 1) * ui_StrategicIconScale * UI_IconScaleCorrection();
+      const float halfHeight = static_cast<float>(texture.mHeight >> 1) * ui_StrategicIconScale * UI_IconScaleCorrection();
 
       primBatcher.DrawQuad(
         Wm3::Vector3f(centerX - halfWidth, centerY - halfHeight, 0.0f),
@@ -12190,8 +12212,8 @@ namespace moho
         }
 
         // `DrawStrategicIconQuad`'s corners, scaled the same way (FAF FA-Binary-Patches #147).
-        const float halfWidth = static_cast<float>(texture->mWidth >> 1) * ui_StrategicIconScale;
-        const float halfHeight = static_cast<float>(texture->mHeight >> 1) * ui_StrategicIconScale;
+        const float halfWidth = static_cast<float>(texture->mWidth >> 1) * ui_StrategicIconScale * UI_IconScaleCorrection();
+        const float halfHeight = static_cast<float>(texture->mHeight >> 1) * ui_StrategicIconScale * UI_IconScaleCorrection();
         mPending.push_back(CD3DPrimBatcher::ScreenQuad{
           centerX - halfWidth, centerY - halfHeight, centerX + halfWidth, centerY + halfHeight, color
         });
@@ -13772,8 +13794,8 @@ namespace moho
         // Sized from the texture itself, so an icon is drawn at its authored
         // pixel size regardless of zoom, times `ui_ProjectileIconScale` (FAF
         // FA-Binary-Patches #147, 0x008625A3).
-        halfWidth = static_cast<float>(icon->mWidth >> 1u) * ui_ProjectileIconScale;
-        halfHeight = static_cast<float>(icon->mHeight >> 1u) * ui_ProjectileIconScale;
+        halfWidth = static_cast<float>(icon->mWidth >> 1u) * ui_ProjectileIconScale * UI_IconScaleCorrection();
+        halfHeight = static_cast<float>(icon->mHeight >> 1u) * ui_ProjectileIconScale * UI_IconScaleCorrection();
         usesIconTexture = true;
         if (UI_RenProjectileGlow) {
           primBatcher->Flush();
@@ -13801,7 +13823,7 @@ namespace moho
           continue;
         }
         // FAF FA-Binary-Patches #147: times `ui_ProjectileIconScale` (0x0086269C).
-        halfWidth = blueprint->Display.StrategicIconSize * 0.5f * ui_ProjectileIconScale;
+        halfWidth = blueprint->Display.StrategicIconSize * 0.5f * ui_ProjectileIconScale * UI_IconScaleCorrection();
         halfHeight = halfWidth;
       }
 
@@ -13926,9 +13948,9 @@ namespace moho
       // FAF FA-Binary-Patches #147 (Scale projectile/deposit/strategic icons): times
       // `ui_DepositIconScale` (0x008630A0 mass, 0x0086329D hydrocarbon).
       const float halfWidth =
-        static_cast<float>(splat->mWidth >> kResourceSplatHalfExtentShift) * ui_DepositIconScale;
+        static_cast<float>(splat->mWidth >> kResourceSplatHalfExtentShift) * ui_DepositIconScale * UI_IconScaleCorrection();
       const float halfHeight =
-        static_cast<float>(splat->mHeight >> kResourceSplatHalfExtentShift) * ui_DepositIconScale;
+        static_cast<float>(splat->mHeight >> kResourceSplatHalfExtentShift) * ui_DepositIconScale * UI_IconScaleCorrection();
       primBatcher.SetTexture(splat);
 
       for (const Wm3::Vector2f& centre : screenPoints) {
