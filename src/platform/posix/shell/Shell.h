@@ -66,9 +66,10 @@ namespace faf_posix::shell
   // The UI Scale correction for the display the game is on: backing-store pixels per panel
   // pixel, never below 1 - 1.57 for a 4K panel on a desktop that "looks like" 3008x1692
   // (6016 / 3840), 1 in a native full-screen mode or on a desktop whose backing store is the
-  // panel's size (a MacBook at its default setting). CScApp multiplies FAF's UI scale by it
-  // once the window and its full-screen mode exist, so the player's 100% is the UI at its
-  // native size on the real panel; FAF lays its UI out once, so it holds until the game
-  // restarts. 1 before Init().
+  // panel's size (a MacBook at its default setting). FAF's layout scale is the player's UI
+  // Scale times this (the macos/fafengine-macos hook, Lua FafUIScaleCorrection(), whenever the
+  // layout module loads; CScApp once the window exists), so 100% is the UI at its native size
+  // on the real panel. FAF lays a UI out once: a mode switch shows at the next load. 1 before
+  // Init().
   [[nodiscard]] float UiScaleCorrection() noexcept;
 } // namespace faf_posix::shell

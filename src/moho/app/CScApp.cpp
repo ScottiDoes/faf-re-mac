@@ -95,31 +95,29 @@ namespace
     }
   }
 
-  // macOS: on a scaled desktop the game draws in backing-store pixels, which macOS shrinks
-  // to the panel's, so FAF's UI scale is multiplied by Shell.h's UiScaleCorrection (1.57 for
-  // a 4K panel that "looks like" 3008x1692, 1 in native full screen) and the player's 100% is
-  // the UI at its native size on the real panel. Called once the window and its full-screen
-  // mode exist and before the front end builds any UI: FAF lays its UI out once.
+  // macOS: FAF's layout scale is the player's UI Scale times Shell.h's UiScaleCorrection
+  // (backing pixels per panel pixel), applied by the macos/fafengine-macos hook whenever the
+  // layout module loads. A load before the window existed (reading options here) used the
+  // desktop's factor; this sets it again from the window's display and mode, exactly.
   void ApplyUiScaleCorrection()
   {
-    const float correction = faf_posix::shell::UiScaleCorrection();
     LuaPlus::LuaState* const state = moho::USER_GetLuaState();
-    if (!(correction > 1.001f) || state == nullptr) {
+    if (state == nullptr) {
       return;
     }
-    // layouthelpers only: effecthelpers builds UI as it loads and lays nothing out by the factor.
-    for (const char* const module : {"/lua/maui/layouthelpers.lua"}) {
-      try {
-        LuaPlus::LuaObject helpers = moho::SCR_Import(state, module);
-        LuaPlus::LuaFunction<LuaPlus::LuaObject> getFactor(helpers["GetPixelScaleFactor"]);
-        const float playerScale = getFactor().GetNumber();
-        LuaPlus::LuaFunction<LuaPlus::LuaObject> setFactor(helpers["SetPixelScaleFactor"]);
-        (void)setFactor(playerScale * correction);
-        gpg::Logf("display: %s UI scale %.4g (UI Scale %.4g x %.4g for the display panel)", module,
-                  playerScale * correction, playerScale, correction);
-      } catch (const std::exception& exception) {
-        gpg::Warnf("display: could not scale the UI in %s: %s", module, exception.what());
+    try {
+      float playerScale = moho::OPTIONS_GetFloat("ui_scale");
+      if (!(playerScale > 0.0f)) {
+        playerScale = 1.0f;
       }
+      const float correction = faf_posix::shell::UiScaleCorrection();
+      LuaPlus::LuaObject helpers = moho::SCR_Import(state, "/lua/maui/layouthelpers.lua");
+      LuaPlus::LuaFunction<LuaPlus::LuaObject> setFactor(helpers["SetPixelScaleFactor"]);
+      (void)setFactor(playerScale * correction);
+      gpg::Logf("display: UI scale %.4g (UI Scale %.4g x %.4g for the display panel)", playerScale * correction,
+                playerScale, correction);
+    } catch (const std::exception& exception) {
+      gpg::Warnf("display: could not scale the UI: %s", exception.what());
     }
   }
 } // namespace
