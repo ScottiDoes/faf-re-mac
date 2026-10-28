@@ -15,8 +15,8 @@
 #                      (init_bench.lua + /benchspeed <n>); default: the replay's own speed
 #   INIT               init file, absolute or in the run folder (default init_faf.lua;
 #                      init_bench.lua with SPEED)
-#   SIZE="<w> <h>"     a window of this client size in the display panel's pixels (/windowed w h;
-#                      half of a 4K panel is "1920 1080"). Default: the game's own choice
+#   SIZE="<w> <h>"     a window of this client size in its backing store's pixels (/windowed w h;
+#                      2 per point on a Retina desktop). Default: the game's own choice
 #                      from Game.prefs (primary_adapter): a resolution is exclusive full
 #                      screen at that display mode, the panel's native one by default;
 #                      "windowed" is the saved window size
@@ -35,7 +35,7 @@
 #                      separated list of frame numbers ("600,1200"; 60 frames a second with
 #                      vsync); PNGs in $OUT/shots
 #   ECHO=1             also print the engine log to stderr as it is written
-# Every other environment variable passes through (FAF_SHELL_HIGHDPI=1 for backing-store pixels, =0 for points,
+# Every other environment variable passes through (FAF_SHELL_HIGHDPI=0 for one pixel per point,
 # FAF_SHADER_CACHE_DIR, VK_* ...).
 # Exit status: the game's (0 normal quit), 124 when TIME ran out.
 set -u

@@ -39,13 +39,12 @@ namespace faf_posix::shell
   // The app loop's MsgWaitForMultipleObjects uses it to wake on input.
   bool WaitForEvent(int milliseconds);
 
-  // What a pixel is. Every coordinate Win32 code sees is in pixels (rule above), and by
-  // default a pixel is a pixel of the display PANEL, whatever macOS's desktop scaling:
-  // a window covering half of a 4K panel is 1920x1080 and the game draws 1920x1080 (macOS
-  // resamples a scaled desktop), and full screen switches the display to a real mode at
-  // one pixel per point - the panel's native resolution by default - so every game pixel
-  // is a panel pixel. FAF_SHELL_HIGHDPI=1 uses the backing store's pixels instead (2 per
-  // point on any Retina desktop), FAF_SHELL_HIGHDPI=0 one pixel per point (Panel.h).
+  // What a pixel is. Every coordinate Win32 code sees is in pixels (rule above): a window's
+  // are its backing store's (2 per point on a Retina desktop, so macOS shrinks the game's
+  // image once, as it does every app's - no app reaches a scaled desktop's panel pixels),
+  // and full screen switches the display to a real mode at one pixel per point - the
+  // panel's native resolution by default - so every game pixel is a panel pixel. The
+  // player sets FAF's UI Scale. FAF_SHELL_HIGHDPI=0: one pixel per point (Panel.h).
   //
   // The game's full-screen resolutions on the main display: its modes at one pixel per
   // point with the panel's shape, one per size at its fastest refresh rate, the panel's
@@ -63,4 +62,13 @@ namespace faf_posix::shell
   // resolution - so FA's default 1024,768,60, or a size this display lacks, opens at native.
   // False (request unchanged) before Init() or without modes.
   bool ResolveFullscreenMode(int& width, int& height, int& refreshRate) noexcept;
+
+  // The UI Scale correction for the display the game is on: backing-store pixels per panel
+  // pixel, never below 1 - 1.57 for a 4K panel on a desktop that "looks like" 3008x1692
+  // (6016 / 3840), 1 in a native full-screen mode or on a desktop whose backing store is the
+  // panel's size (a MacBook at its default setting). CScApp multiplies FAF's UI scale by it
+  // once the window and its full-screen mode exist, so the player's 100% is the UI at its
+  // native size on the real panel; FAF lays its UI out once, so it holds until the game
+  // restarts. 1 before Init().
+  [[nodiscard]] float UiScaleCorrection() noexcept;
 } // namespace faf_posix::shell

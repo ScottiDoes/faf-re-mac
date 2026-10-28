@@ -186,7 +186,8 @@ namespace faf_posix::shell::detail
   // --- Metal views (MetalView.cpp) ---------------------------------------------------------
   // Positions an SDL Metal view (an NSView) in its superview: frame in points measured from
   // the content view's top-left, or filling it and following its size.
-  void SetMetalViewFrame(SDL_MetalView view, double x, double y, double width, double height, bool fill) noexcept;
+  void SetMetalViewFrame(SDL_MetalView view, double x, double y, double width, double height, bool fill,
+                         double pixelsPerPoint) noexcept;
   void SetMetalViewHidden(SDL_MetalView view, bool hidden) noexcept;
 
   std::string Utf8FromWide(const wchar_t* text);

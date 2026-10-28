@@ -1,16 +1,17 @@
-// Panel pixels (Panel.h, Shell.h): what a pixel is for the game on macOS, the display's
-// native panel resolution, and the full-screen modes the game offers.
+// The display panel (Panel.h, Shell.h): what a pixel is for the game on macOS, the
+// display's native panel resolution, and the full-screen modes the game offers.
 //
-// The game lays out and draws in "pixels". On a Mac desktop those are not the panel's: a
-// 4K panel that "looks like" 3008x1692 is drawn at 6016x3384 and shrunk to 3840x2160 by the
-// display pipeline. By default the shell makes a pixel a panel pixel: a window covering half
-// of that panel is 1920x1080 to the game, and the game draws 1920x1080 (macOS then resamples
-// the scaled desktop). In full screen the game switches the display to a real mode at one
-// pixel per point - the native one by default - and every game pixel is a panel pixel.
+// A window's pixels are the backing store's: on a scaled desktop (a 4K panel that "looks
+// like" 3008x1692 is composited at 6016x3384 and shrunk to 3840x2160 by the display) no
+// app reaches the panel's pixels, and drawing at the backing resolution leaves one
+// downscale, the sharpest result. Full screen switches the display to a real mode at one
+// pixel per point - the panel's native one by default - so every game pixel is a panel
+// pixel. The player sets FAF's UI Scale.
 
 #include "platform/posix/shell/Panel.h"
 
 #include "platform/posix/shell/Shell.h"
+#include "platform/posix/shell/ShellState.h"
 
 #include <CoreGraphics/CoreGraphics.h>
 
@@ -100,12 +101,6 @@ namespace faf_posix::shell
       return native.first > 0 ? native : largestUnscaled;
     }
 
-    bool SameMode(const SDL_DisplayMode* a, const SDL_DisplayMode* b) noexcept
-    {
-      return a != nullptr && b != nullptr && a->w == b->w && a->h == b->h &&
-             std::fabs(a->pixel_density - b->pixel_density) < 0.01f;
-    }
-
     void BuildModes(PanelState& p) noexcept
     {
       p.modes.clear();
@@ -155,10 +150,7 @@ namespace faf_posix::shell
     {
       static const PixelMode mode = [] {
         const char* const value = std::getenv("FAF_SHELL_HIGHDPI");
-        if (value == nullptr || value[0] == '\0') {
-          return PixelMode::Panel;
-        }
-        return std::strcmp(value, "0") == 0 ? PixelMode::Points : PixelMode::Backing;
+        return value != nullptr && std::strcmp(value, "0") == 0 ? PixelMode::Points : PixelMode::Backing;
       }();
       return mode;
     }
@@ -178,25 +170,12 @@ namespace faf_posix::shell
 
     float DisplayScale(const SDL_DisplayID display) noexcept
     {
-      const PixelMode setting = PixelModeSetting();
-      if (setting == PixelMode::Points) {
+      if (PixelModeSetting() == PixelMode::Points) {
         return 1.0f;
       }
+      // The current mode's own pixels: the desktop's backing store, or a full-screen mode.
       const SDL_DisplayMode* const current = SDL_GetCurrentDisplayMode(display);
-      if (current == nullptr || current->w <= 0) {
-        return 1.0f;
-      }
-      const float density = current->pixel_density > 0.0f ? current->pixel_density : 1.0f;
-      // Backing, or a full-screen mode the game set: the mode's own pixels.
-      if (setting == PixelMode::Backing || !SameMode(current, SDL_GetDesktopDisplayMode(display))) {
-        return density;
-      }
-      int nativeWidth = 0;
-      int nativeHeight = 0;
-      if (!NativePixels(display, nativeWidth, nativeHeight)) {
-        return density;
-      }
-      return static_cast<float>(nativeWidth) / static_cast<float>(current->w);
+      return current != nullptr && current->pixel_density > 0.0f ? current->pixel_density : 1.0f;
     }
 
     void ForgetDisplays() noexcept
@@ -290,6 +269,36 @@ namespace faf_posix::shell
     height = modeHeight;
     refreshRate = modeRefresh;
     return true;
+  }
+
+  float UiScaleCorrection() noexcept
+  {
+    if (!IsActive()) {
+      return 1.0f;
+    }
+    // The display of the game's window (the first visible top-level one), else the main one.
+    SDL_DisplayID display = 0;
+    {
+      std::lock_guard<std::recursive_mutex> guard(detail::S().lock);
+      for (const HWND handle : detail::S().topLevels) {
+        const detail::WindowRecord* const top = detail::Find(handle);
+        if (top != nullptr && top->sdl != nullptr && top->visible) {
+          display = SDL_GetDisplayForWindow(top->sdl);
+          break;
+        }
+      }
+    }
+    if (display == 0) {
+      display = SDL_GetPrimaryDisplay();
+    }
+    const SDL_DisplayMode* const current = SDL_GetCurrentDisplayMode(display);
+    int nativeWidth = 0;
+    int nativeHeight = 0;
+    if (current == nullptr || current->w <= 0 || !detail::NativePixels(display, nativeWidth, nativeHeight)) {
+      return 1.0f;
+    }
+    const float backingWidth = current->w * (current->pixel_density > 0.0f ? current->pixel_density : 1.0f);
+    return std::max(1.0f, backingWidth / static_cast<float>(nativeWidth));
   }
 
   void SetFullscreenMode(const int width, const int height, const int refreshRate) noexcept

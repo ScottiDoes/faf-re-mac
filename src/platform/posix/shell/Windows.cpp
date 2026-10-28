@@ -380,7 +380,7 @@ namespace faf_posix::shell
       const bool fills = rect.left == 0 && rect.top == 0 && rect.right == top->clientWidth && rect.bottom == top->clientHeight;
       const double density = DensityOf(top);
       SetMetalViewFrame(record->metalView, rect.left / density, rect.top / density, (rect.right - rect.left) / density,
-                        (rect.bottom - rect.top) / density, fills || record == top);
+                        (rect.bottom - rect.top) / density, fills || record == top, density);
       SetMetalViewHidden(record->metalView, !ShownChain(record));
     }
 
@@ -1112,6 +1112,7 @@ namespace faf_posix::shell
           density = DensityOf(top);
         }
         const float scale = s.screenScale;
+        bool roundedSize = false;
         if ((uFlags & SWP_NOSIZE) == 0) {
           // Screen pixels of the frame -> client pixels -> points.
           const double clientW = std::max<LONG>(1, cx - l - r) * (density / scale);
@@ -1123,6 +1124,20 @@ namespace faf_posix::shell
           SDL_GetWindowSize(sdl, &haveW, &haveH);
           if (wantW != haveW || wantH != haveH) {
             SDL_SetWindowSize(sdl, wantW, wantH);
+          }
+          // A client size that is not a whole number of points (an odd pixel count at 2 per
+          // point) cannot be had. Record the size asked for, so the sync below reports the
+          // size the window got as a resize - Windows likewise reports a constrained size -
+          // and the engine sizes its back buffer to the layer instead of stretching it a pixel.
+          const LONG askedW = std::max<LONG>(1, Round(clientW));
+          const LONG askedH = std::max<LONG>(1, Round(clientH));
+          if (Round(wantW * density) != askedW || Round(wantH * density) != askedH) {
+            std::lock_guard<std::recursive_mutex> guard(s.lock);
+            if (WindowRecord* const top = Find(hWnd)) {
+              top->clientWidth = static_cast<int>(askedW);
+              top->clientHeight = static_cast<int>(askedH);
+              roundedSize = true;
+            }
           }
         }
         if ((uFlags & SWP_NOMOVE) == 0) {
@@ -1152,7 +1167,7 @@ namespace faf_posix::shell
         if ((uFlags & SWP_FRAMECHANGED) != 0) {
           ApplyMinMax(hWnd); // the frame and the size limits are asked for again
         }
-        SyncTopLevel(hWnd, false);
+        SyncTopLevel(hWnd, roundedSize); // a rounded size is reported as the user's resize is
         if ((uFlags & (SWP_NOSIZE | SWP_FRAMECHANGED)) != SWP_NOSIZE) {
           ApplyFullScreen(hWnd);
         }

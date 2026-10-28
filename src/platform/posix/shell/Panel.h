@@ -1,22 +1,21 @@
 #pragma once
 
-// Panel pixels: the scale between SDL's points and the pixels the shell gives Win32 code
-// (Shell.h), and the game's exclusive full-screen modes. Panel.cpp.
+// The display panel: the scale between SDL's points and the pixels the shell gives Win32
+// code (Shell.h), the panel's native resolution, and the game's exclusive full-screen modes.
+// Panel.cpp.
 
 #include <SDL3/SDL.h>
 
 namespace faf_posix::shell::detail
 {
   // How many pixels a point is (FAF_SHELL_HIGHDPI):
-  // - Panel (default): the display panel's own pixels. On the desktop that is the panel's
-  //   native width over the desktop's width in points (1.28 for a 4K panel that "looks like"
-  //   3008x1692, 2 for a MacBook at its default setting); in a full-screen mode the game set,
-  //   the mode's own pixels (the panel scales a lower mode up itself).
-  // - Backing ("1"): the window's backing store (2 on any Retina desktop).
+  // - Backing (default): the current display mode's own pixels - the backing store on the
+  //   desktop (2 on a Retina desktop, so macOS only ever shrinks the game's image once, as
+  //   it does every app's), and 1 in a full-screen mode the game set (every game pixel a
+  //   panel pixel at the native mode).
   // - Points ("0"): one pixel per point.
   enum class PixelMode
   {
-    Panel,
     Backing,
     Points,
   };

@@ -51,6 +51,9 @@
 #include "moho/ui/IUIManager.h"
 #include "moho/ui/UiWorldShapes.h"
 #if defined(FAF_POSIX)
+#include <cstdio>
+
+#include "moho/lua/CScrLuaObjectFactory.h"
 #include "platform/posix/shell/Shell.h"
 #endif
 
@@ -59,6 +62,68 @@ namespace gpg
   void Logf(const char* fmt, ...);
   void Warnf(const char* fmt, ...);
 } // namespace gpg
+#if defined(FAF_POSIX)
+
+namespace
+{
+  // macOS: when the saved primary_adapter resolution is not one of this display's modes
+  // (FA's default 1024,768,60, a size from another display), the game opens at the panel's
+  // native mode instead. Storing that in the profile makes the Options screen show the mode
+  // in use, so choosing "windowed" there is a change it acts on. Through the profile table
+  // only: optionslogic.SetCurrent would apply options mid-start-up.
+  void StoreResolvedAdapterMode(const int width, const int height, const int refreshRate)
+  {
+    LuaPlus::LuaState* const state = moho::USER_GetLuaState();
+    if (state == nullptr) {
+      return;
+    }
+    try {
+      LuaPlus::LuaObject prefs = moho::SCR_Import(state, "/lua/user/prefs.lua");
+      LuaPlus::LuaFunction<LuaPlus::LuaObject> getField(prefs["GetFromCurrentProfile"]);
+      LuaPlus::LuaObject options = getField("options");
+      if (!options.IsTable()) {
+        return; // no profile yet: a new profile starts from the defaults and comes here again
+      }
+      char value[48];
+      std::snprintf(value, sizeof(value), "%d,%d,%d", width, height, refreshRate);
+      options.SetString("primary_adapter", value);
+      LuaPlus::LuaFunction<LuaPlus::LuaObject> setField(prefs["SetToCurrentProfile"]);
+      (void)setField("options", options);
+      gpg::Logf("display: primary_adapter is now %s (the display's native mode)", value);
+    } catch (const std::exception& exception) {
+      gpg::Warnf("display: could not store primary_adapter: %s", exception.what());
+    }
+  }
+
+  // macOS: on a scaled desktop the game draws in backing-store pixels, which macOS shrinks
+  // to the panel's, so FAF's UI scale is multiplied by Shell.h's UiScaleCorrection (1.57 for
+  // a 4K panel that "looks like" 3008x1692, 1 in native full screen) and the player's 100% is
+  // the UI at its native size on the real panel. Called once the window and its full-screen
+  // mode exist and before the front end builds any UI: FAF lays its UI out once.
+  void ApplyUiScaleCorrection()
+  {
+    const float correction = faf_posix::shell::UiScaleCorrection();
+    LuaPlus::LuaState* const state = moho::USER_GetLuaState();
+    if (!(correction > 1.001f) || state == nullptr) {
+      return;
+    }
+    // layouthelpers only: effecthelpers builds UI as it loads and lays nothing out by the factor.
+    for (const char* const module : {"/lua/maui/layouthelpers.lua"}) {
+      try {
+        LuaPlus::LuaObject helpers = moho::SCR_Import(state, module);
+        LuaPlus::LuaFunction<LuaPlus::LuaObject> getFactor(helpers["GetPixelScaleFactor"]);
+        const float playerScale = getFactor().GetNumber();
+        LuaPlus::LuaFunction<LuaPlus::LuaObject> setFactor(helpers["SetPixelScaleFactor"]);
+        (void)setFactor(playerScale * correction);
+        gpg::Logf("display: %s UI scale %.4g (UI Scale %.4g x %.4g for the display panel)", module,
+                  playerScale * correction, playerScale, correction);
+      } catch (const std::exception& exception) {
+        gpg::Warnf("display: could not scale the UI in %s: %s", module, exception.what());
+      }
+    }
+  }
+} // namespace
+#endif
 
 namespace
 {
@@ -1510,6 +1575,9 @@ bool CScApp::CreateDevice()
     int height = static_cast<int>(primaryHead.mHeight);
     int refreshRate = static_cast<int>(primaryHead.framesPerSecond);
     if (faf_posix::shell::ResolveFullscreenMode(width, height, refreshRate)) {
+      if (width != static_cast<int>(primaryHead.mWidth) || height != static_cast<int>(primaryHead.mHeight)) {
+        StoreResolvedAdapterMode(width, height, refreshRate);
+      }
       primaryHead.mWidth = static_cast<std::uint32_t>(width);
       primaryHead.mHeight = static_cast<std::uint32_t>(height);
       primaryHead.framesPerSecond = static_cast<std::uint32_t>(refreshRate);
@@ -1609,6 +1677,9 @@ bool CScApp::CreateDevice()
   if (const gpg::gal::DeviceContext* const createdContext = device->GetDeviceContext()) {
     ApplyWindowTitleDetails(title, *createdContext);
   }
+#if defined(FAF_POSIX)
+  ApplyUiScaleCorrection();
+#endif
   return true;
 }
 

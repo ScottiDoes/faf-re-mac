@@ -5,9 +5,8 @@
 // each window can present through a CAMetalLayer (MetalLayer, MetalView.cpp). Headless runs
 // never call Init(), and every function here then answers "no window system".
 //
-// What a pixel is (Panel.h): by default a pixel of the display panel, so the game's
-// resolution lines up with the panel; FAF_SHELL_HIGHDPI=1 the backing store's pixels,
-// FAF_SHELL_HIGHDPI=0 one pixel per point.
+// What a pixel is (Panel.h): a window's backing-store pixels, a full-screen mode's own
+// pixels; FAF_SHELL_HIGHDPI=0 one pixel per point.
 
 #include "platform/posix/shell/ShellState.h"
 #include "platform/posix/shell/Panel.h"
@@ -144,9 +143,7 @@ namespace faf_posix::shell
     detail::TestInputInit();
     std::fprintf(stderr, "[shell] SDL %d.%d.%d video '%s', screen scale %.2f%s\n", SDL_MAJOR_VERSION,
                  SDL_MINOR_VERSION, SDL_MICRO_VERSION, SDL_GetCurrentVideoDriver(), s.screenScale,
-                 detail::PixelModeSetting() == detail::PixelMode::Panel     ? " (panel pixels)"
-                 : detail::PixelModeSetting() == detail::PixelMode::Backing ? " (FAF_SHELL_HIGHDPI=1: backing pixels)"
-                                                                            : " (FAF_SHELL_HIGHDPI=0: one pixel per point)");
+                 detail::PixelModeSetting() == detail::PixelMode::Points ? " (FAF_SHELL_HIGHDPI=0: one pixel per point)" : "");
     return true;
   }
 
