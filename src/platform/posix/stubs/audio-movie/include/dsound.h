@@ -2,14 +2,13 @@
 
 // POSIX build (FAF_POSIX): stand-in for the Windows SDK <dsound.h>.
 //
-// DirectSound is Windows-only. The engine opens it in two places: func_InitSound
-// (moho/audio/AudioEngine.cpp) asks it for the speaker layout, and CMovieManager
-// (moho/misc/StartupHelpers.cpp) hands a device to the movie player. Both already
-// handle a machine without DirectSound ("Failed to create DirectSound." and carry on
-// without sound). On POSIX DirectSoundCreate is that machine: it fails with
-// DSERR_NODRIVER (platform/posix/stubs/audio-movie/DirectSoundPosix.cpp), so no
-// IDirectSound object ever exists here. The interfaces below are declared in the
-// SDK's vtable order so the calling code compiles unchanged.
+// The engine opens DirectSound in two places: func_InitSound (moho/audio/AudioEngine.cpp)
+// asks it for the speaker layout, and CMovieManager (moho/misc/StartupHelpers.cpp) hands a
+// device to the SFD movie player, whose sink (moho/movie/sfd/DirectSoundMovieSink.cpp)
+// streams embedded movie audio through a secondary buffer. On POSIX DirectSoundCreate
+// and the interfaces below are implemented on SDL3 audio
+// (platform/posix/stubs/audio-movie/DirectSoundPosix.cpp). The interfaces are declared
+// in the SDK's vtable order so the calling code compiles unchanged.
 
 #if !defined(FAF_POSIX)
 #error "This dsound.h is the POSIX stand-in; Windows builds use the Windows SDK"
@@ -72,6 +71,26 @@ typedef struct IDirectSoundBuffer* LPDIRECTSOUNDBUFFER;
 
 #define DSBVOLUME_MIN -10000
 #define DSBVOLUME_MAX 0
+#define DSBPAN_LEFT -10000
+#define DSBPAN_CENTER 0
+#define DSBPAN_RIGHT 10000
+#define DSBFREQUENCY_ORIGINAL 0
+#define DSBFREQUENCY_MIN 100
+#define DSBFREQUENCY_MAX 200000
+#define DSBSIZE_MIN 4
+#define DSBSIZE_MAX 0x0FFFFFFF
+
+#define DSCAPS_PRIMARYMONO 0x00000001
+#define DSCAPS_PRIMARYSTEREO 0x00000002
+#define DSCAPS_PRIMARY8BIT 0x00000004
+#define DSCAPS_PRIMARY16BIT 0x00000008
+#define DSCAPS_CONTINUOUSRATE 0x00000010
+#define DSCAPS_EMULDRIVER 0x00000020
+#define DSCAPS_CERTIFIED 0x00000040
+#define DSCAPS_SECONDARYMONO 0x00000100
+#define DSCAPS_SECONDARYSTEREO 0x00000200
+#define DSCAPS_SECONDARY8BIT 0x00000400
+#define DSCAPS_SECONDARY16BIT 0x00000800
 
 // --- Speaker configurations (IDirectSound::GetSpeakerConfig) --------------------------
 #define DSSPEAKER_DIRECTOUT 0x00000000
@@ -189,5 +208,5 @@ struct IDirectSoundBuffer
 };
 
 // --- Entry point ---------------------------------------------------------------------------
-// POSIX: always fails with DSERR_NODRIVER and sets *ppDS to null (see the top of this file).
+// POSIX: the default SDL audio output; DSERR_NODRIVER (and *ppDS null) when SDL has none.
 extern "C" HRESULT WINAPI DirectSoundCreate(const GUID* pcGuidDevice, LPDIRECTSOUND* ppDS, void* pUnkOuter);

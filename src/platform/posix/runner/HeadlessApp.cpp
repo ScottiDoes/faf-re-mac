@@ -307,7 +307,23 @@ void faf_runner::HeadlessApp::Main()
 
   NoteProgress();
   ApplyRunnerGameSpeed();
+  SampleFpcr(false);
   CheckRunEnd();
+}
+
+// Every thread's FPCR (FpcrWatch.cpp), every 2 s of wall time once the game ticks (the sim
+// thread and the /simworkers pool exist by then), and once more before the teardown.
+void faf_runner::HeadlessApp::SampleFpcr(const bool force)
+{
+  if (GetOptions().noFpcrCheck || (!force && mLastTick <= 0)) {
+    return;
+  }
+  const Clock::time_point now = Clock::now();
+  if (!force && FpcrWatchSamples() > 0 && SecondsBetween(mLastFpcrSample, now) < 2.0) {
+    return;
+  }
+  mLastFpcrSample = now;
+  (void)FpcrWatchSample();
 }
 
 // CScApp::Main's minimized branch, always: sleep until the next beat is due, or until the
@@ -440,6 +456,10 @@ void faf_runner::HeadlessApp::Destroy()
 {
   NoteProgress();
   LogSimRate();
+  SampleFpcr(true);
+  if (!GetOptions().noFpcrCheck) {
+    FpcrWatchLog();
+  }
   if (ReportGetExitReason() == nullptr) {
     // The loop ended without the runner asking: /exitongameover (CWldSession::DoBeat) or
     // the game (ExitApplication, the escape menu's quit).

@@ -8,8 +8,10 @@
 #
 # Usage: macos/run_replay.sh [extra faf_replay switches ...]
 # Environment:
-#   REPLAY            replay file (default ~/Gaming/faf/bench/replay_27890640.scfareplay)
-#   REPLAYID          its id (default 27890640)
+#   REPLAY            replay file (default ~/Gaming/faf/bench/replay_27890640.scfareplay); a
+#                     relative path is taken from the directory the script is started in
+#   REPLAYID          its id (default: the first run of digits in the file name, else the
+#                     name without its extension)
 #   SPEED             /benchspeed game speed, -10..10 (default 10, the replay slider's maximum)
 #   MAXMIN            wall-clock limit in minutes (default 60)
 #   OUT               folder for the log, result and checksum files (default build/macos)
@@ -25,17 +27,25 @@
 #                     $OUT/checksums-<id>.txt; main_x64.exe takes the same switches
 #                     (FAFRE_ARGS) for a beat-by-beat comparison with the x64 build
 # Output: the runner's line
-#   FAF_REPLAY_RESULT replay=<id> beats=<last beat> mismatches=<count> exit=<reason>
-# (also saved as $OUT/replay-<id>.result), the sim rate from the benchmark hook's BENCH
-# lines, and the runner's exit status: 0 pass, 1 checksum mismatches, 2 the run did not
-# complete, 3 engine Die; 128+n when signal n killed it. See macos/porting/runner.md.
+#   FAF_REPLAY_RESULT replay=<id> beats=<last beat> tick=<game tick> recorded=<r> checked=<c>
+#     mismatches=<count> exit=<reason> verdict=<pass|mismatch|incomplete|fpcr|unverified>
+# (also saved as $OUT/replay-<id>.result; recorded = player checksums in the replay, checked =
+# how many of them the sim compared), the sim rate from the benchmark hook's BENCH lines, and
+# the runner's exit status: 0 pass, 1 checksum mismatches, 2 the run did not complete or
+# compared nothing (or a thread's FPCR was not 0), 3 engine Die; 128+n when signal n killed
+# it. See macos/porting/runner.md and lockin.md; macos/verify_replays.sh runs a whole set.
 set -u
 root=${0:A:h:h}
 build=$root/build/macos
 RUN=/Users/scottharris/Gaming/faf-re-bin/run-native
 EXE=${FAF_REPLAY_EXE:-$build/faf_replay}
 REPLAY=${REPLAY:-/Users/scottharris/Gaming/faf/bench/replay_27890640.scfareplay}
-REPLAYID=${REPLAYID:-27890640}
+REPLAY=${REPLAY:A}   # absolute: the run happens in the run folder (WAVE3 F3)
+if [[ -z ${REPLAYID:-} ]]; then
+    # The first run of digits in the file name (replay_27890640, 27890640-Player), else the name.
+    if [[ ${REPLAY:t:r} =~ '[0-9]+' ]]; then REPLAYID=$MATCH; else REPLAYID=${REPLAY:t:r}; fi
+    REPLAYID=${REPLAYID// /_}
+fi
 SPEED=${SPEED:-10}
 MAXMIN=${MAXMIN:-60}
 OUT=${OUT:-$build}
@@ -84,6 +94,11 @@ grep -oE "BENCH wall=[0-9.]+ tick=[0-9]+ speed=-?[0-9]+ target=-?[0-9]+" "$LOG" 
     # No benchmark hook (/noui): the runner's own measurement (first moving tick to last).
     { grep -oE "faf_replay: sim rate: .*" "$LOG" 2>/dev/null | sed 's/^faf_replay: /  /' | grep . || print "  sim rate: no data" }
 print "  checksum mismatches in the log: $(grep -c 'Checksum for beat' "$LOG" 2>/dev/null)"
+result=$(grep -m1 '^FAF_REPLAY_RESULT' "$RESULT" 2>/dev/null)
+if [[ $result == *" checked="* ]]; then
+    recorded=${${result##* recorded=}%% *} checked=${${result##* checked=}%% *}
+    print "  recorded player checksums: $recorded, compared by the sim: $checked (verdict ${result##* verdict=})"
+fi
 
 if [[ ${SYNCLOG:-0} == 1 ]]; then
     sums=$OUT/checksums-$REPLAYID.txt

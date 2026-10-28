@@ -8,9 +8,11 @@
 // CFG_GetArgOption works here as it does in WinMain.
 //
 // Output: one line on stdout,
-//   FAF_REPLAY_RESULT replay=<id> beats=<last beat> mismatches=<count> exit=<reason>
-// and exit status 0 (replay played to its end, no mismatch), 1 (mismatches) or 2 (the run did
-// not complete). Switches and an example: macos/porting/runner.md.
+//   FAF_REPLAY_RESULT replay=<id> beats=<last beat> tick=<game tick> recorded=<r> checked=<c>
+//     mismatches=<count> exit=<reason> verdict=<pass|mismatch|incomplete|fpcr|unverified>
+// and exit status 0 (replay played to its end, recorded checksums compared, no mismatch),
+// 1 (mismatches) or 2 (the run did not complete, compared nothing, or a thread's FPCR was not
+// 0). Switches and an example: macos/porting/runner.md and macos/porting/lockin.md.
 
 #include "platform/posix/runner/Runner.h"
 
@@ -99,6 +101,25 @@ namespace
       gOptions.benchSpeed = std::atoi(value.c_str());
       gOptions.haveBenchSpeed = true;
     }
+    gOptions.noFpcrCheck = HasSwitch("/nofpcrcheck");
+  }
+
+  // The replay's recorded checksums (ReplayChecks.cpp), read from the file the engine is about
+  // to play. A replay that cannot be read here still runs; its result cannot be a pass.
+  void LoadReplayChecks(const msvc8::string& replayPath)
+  {
+    std::string hostPath = replayPath.c_str();
+    char buffer[4096];
+    const std::size_t length = faf_posixHostPathA(replayPath.c_str(), buffer, sizeof(buffer));
+    if (length > 0 && length < sizeof(buffer)) {
+      hostPath.assign(buffer, length);
+    }
+    std::string error;
+    if (!faf_runner::ReplayChecksLoad(hostPath.c_str(), &error)) {
+      std::fprintf(
+        stderr, "faf_replay: cannot count the checksums in %s: %s (the run cannot pass)\n", hostPath.c_str(), error.c_str()
+      );
+    }
   }
 
   // gpg::Die (WinMain installs FatalErrorDieHandler, which writes the crash report and shows
@@ -181,7 +202,7 @@ namespace
       "usage: faf_replay /init <init.lua> /replay <file.scfareplay> [/replayid <id>] [/log <file>]\n"
       "                  [/benchspeed <n>] [/exitongameover] [/stalltimeout <s>] [/timeout <s>]\n"
       "                  [/nosound] [/nomovie] [/nobugreport] [/framerate <n>] [/sse2] [/noui]\n"
-      "                  [/echolog] [/skipselftest] [engine switches ...]\n"
+      "                  [/echolog] [/skipselftest] [/nofpcrcheck] [engine switches ...]\n"
       "See macos/porting/runner.md.\n"
     );
   }
@@ -217,6 +238,7 @@ int main(int argc, char** argv)
     LeaveProcess(faf_runner::ReportFinish(faf_runner::kExitUsage));
   }
   ReadOptions();
+  LoadReplayChecks(replayPath);
 
   if (!RunSelfTests()) {
     if (!HasSwitch("/skipselftest")) {

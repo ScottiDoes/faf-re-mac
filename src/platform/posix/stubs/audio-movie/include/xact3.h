@@ -2,16 +2,17 @@
 
 // POSIX build (FAF_POSIX): stand-in for the DirectX SDK (June 2010) <xact3.h>.
 //
-// XACT is Windows-only and is not linked on POSIX. The engine still needs the SDK's
-// value types: moho/audio/AudioEngine.h builds its recovered layouts (the notification
-// descriptor and payload, the runtime-parameter block, the streaming wave-bank
-// parameters) on them and static_asserts their sizes and offsets. Everything here is
-// declared at the layout those asserts check; nothing is implemented. The engine's own
-// XACT 2 interfaces (moho::IXACTEngine, IXACTSoundBank, IXACTCue, IXACTWaveBank) are
-// declared in AudioEngine.h, so the SDK's IXACT3* interfaces stay opaque.
+// XACT itself is Windows-only. The engine still needs the SDK's value types:
+// moho/audio/AudioEngine.h builds its recovered layouts (the notification descriptor and
+// payload, the runtime-parameter block, the streaming wave-bank parameters) on them and
+// static_asserts their sizes and offsets. Everything here is declared at the layout those
+// asserts check; nothing is implemented. The engine's own XACT 2 interfaces
+// (moho::IXACTEngine, IXACTSoundBank, IXACTCue, IXACTWaveBank) are declared in
+// AudioEngine.h, so the SDK's IXACT3* interfaces stay opaque.
 //
-// Milestone 3 (sound on macOS) replaces the null audio path with FAudio's XACT3
-// implementation; see macos/porting/audio-movie.md.
+// Since milestone 3 the runtime behind those interfaces is FAudio's FACT
+// (platform/posix/audio/FactXact.cpp), which converts these types to FACT's; see
+// macos/porting/audio.md.
 
 #if !defined(FAF_POSIX)
 #error "This xact3.h is the POSIX stand-in; Windows builds use the DirectX SDK"
@@ -203,6 +204,15 @@ typedef struct XACT_RUNTIME_PARAMETERS
   IXAudio2MasteringVoice* pMasteringVoice;
 } XACT_RUNTIME_PARAMETERS, *LPXACT_RUNTIME_PARAMETERS;
 typedef const XACT_RUNTIME_PARAMETERS* LPCXACT_RUNTIME_PARAMETERS;
+
+// IXACT3Engine::GetRendererDetails' output. WCHAR is the 32-bit wchar_t on POSIX; the
+// structure is filled in memory only (platform/posix/audio/FactXact.cpp), never stored.
+typedef struct XACT_RENDERER_DETAILS
+{
+  WCHAR rendererID[0xFF];
+  WCHAR displayName[0xFF];
+  BOOL defaultDevice;
+} XACT_RENDERER_DETAILS, *LPXACT_RENDERER_DETAILS;
 
 typedef struct XACT_STREAMING_PARAMETERS
 {

@@ -198,6 +198,21 @@ if(TARGET faf_dxc_bridge)
   set(_faf_bridge_objects $<TARGET_OBJECTS:faf_dxc_bridge>)
 endif()
 
+# --- Sound and movies (milestone 3) -----------------------------------------------------
+# FAudio (Homebrew): FACT (the XACT runtime; it reads FA's XACT 2 banks, content version
+# 43), F3DAudio (X3DAudio) and its SDL3 output. macos/ffmpeg.cmake (owned by the movies
+# package) builds FFmpeg from dependencies/ffmpeg for the SFD movie decoder: it sets
+# FAF_FFMPEG_LIBRARIES (what the executables link) and may add include directories to
+# faf_engine. Both executables link FAF_MEDIA_LIBRARIES.
+find_package(FAudio CONFIG REQUIRED HINTS /opt/homebrew)
+target_include_directories(faf_engine PUBLIC
+  "$<TARGET_PROPERTY:FAudio::FAudio-shared,INTERFACE_INCLUDE_DIRECTORIES>")
+set(FAF_FFMPEG_LIBRARIES "")
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/ffmpeg.cmake")
+  include(ffmpeg.cmake)
+endif()
+set(FAF_MEDIA_LIBRARIES FAudio::FAudio ${FAF_FFMPEG_LIBRARIES})
+
 # --- Headless replay runner (milestone 1) ---------------------------------------------
 # faf_replay: the engine plus src/platform/posix/runner (main(), headless app, null
 # renderer start-up). The executable is built from object lists only, engine objects
@@ -213,7 +228,7 @@ if(_faf_runner_sources)
   add_executable(faf_replay $<TARGET_OBJECTS:faf_engine> ${_faf_bridge_objects} $<TARGET_OBJECTS:faf_runner>)
   set_target_properties(faf_replay PROPERTIES LINKER_LANGUAGE CXX)
   target_link_libraries(faf_replay PRIVATE
-    Wm3Foundation faf_zlib SDL3::SDL3 ${FAF_MACOS_FRAMEWORKS}
+    Wm3Foundation faf_zlib SDL3::SDL3 ${FAF_MEDIA_LIBRARIES} ${FAF_MACOS_FRAMEWORKS}
     # Wm3System.cpp (bundle paths): FSRef / ProcessSerialNumber APIs.
     "-framework CoreServices" "-framework ApplicationServices")
   # The build path may contain a space (/Volumes/SSD Programs/...): target_link_options
@@ -232,7 +247,7 @@ if(_faf_game_sources)
   add_executable(faf_game $<TARGET_OBJECTS:faf_engine> ${_faf_bridge_objects} $<TARGET_OBJECTS:faf_game_main>)
   set_target_properties(faf_game PROPERTIES LINKER_LANGUAGE CXX)
   target_link_libraries(faf_game PRIVATE
-    Wm3Foundation faf_zlib SDL3::SDL3 ${FAF_MACOS_FRAMEWORKS}
+    Wm3Foundation faf_zlib SDL3::SDL3 ${FAF_MEDIA_LIBRARIES} ${FAF_MACOS_FRAMEWORKS}
     "-framework CoreServices" "-framework ApplicationServices")
   target_link_options(faf_game PRIVATE "LINKER:-map,${CMAKE_CURRENT_BINARY_DIR}/faf_game.map")
 endif()

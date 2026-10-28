@@ -104,8 +104,20 @@ namespace moho::sfd
         queuedBytes += frame->bgra.size();
       for (const auto& frame : audio)
         queuedBytes += frame.samples.size() * sizeof(std::int16_t);
+#if defined(FAF_POSIX)
+      // Tick keeps half a second of video queued, plus a frame or two while it catches up:
+      // 16-18 frames at 30 fps, which for a 1824x1024 movie (7.5 MB a frame: main_menu.sfd,
+      // the credits) is 120-135 MB, so 128 MB failed the main menu's movie within seconds
+      // (18 frames queued, in game). Allow 32 frames of this movie's size (about twice the
+      // lead), at least 128 MB.
+      const std::size_t frameBytes = video.empty() ? 0 : video.back()->bgra.size();
+      const std::size_t limitBytes = std::max<std::size_t>(std::size_t{128} * 1024 * 1024, frameBytes * 32);
+      if (video.size() > 120 || audio.size() > 512 || queuedBytes > limitBytes)
+        throw std::runtime_error("Excessive SFD stream interleave");
+#else
       if (video.size() > 120 || audio.size() > 512 || queuedBytes > 128 * 1024 * 1024)
         throw std::runtime_error("Excessive SFD stream interleave");
+#endif
     }
     void SupplyAudio()
     {
@@ -154,6 +166,18 @@ namespace moho::sfd
         if (!needVideo && !needAudio)
           break;
         Decode();
+#if defined(FAF_POSIX)
+        // After a stall of this worker (a busy or suspended process), everything that came
+        // due meanwhile is decoded in this loop before the loop below shows the latest due
+        // frame. Take due frames as they arrive instead, as that loop would, so the queue
+        // holds only the half second ahead: otherwise a 1824x1024 movie (7.5 MB a frame,
+        // main_menu.sfd) passes Decode's 128 MB interleave limit after a stall of about
+        // 0.1 s and fails for good ("Excessive SFD stream interleave").
+        while (!video.empty() && video.front()->pts <= now + 0.005) {
+          current = std::move(video.front());
+          video.pop_front();
+        }
+#endif
         SupplyAudio();
       }
       now = Time();
@@ -236,6 +260,21 @@ namespace moho::sfd
     s.endTime = 0;
     s.anchor = Clock::now();
     try {
+#if defined(FAF_POSIX)
+      // CMovie passes the file system's Windows-form native path ("\users\...\x.sfd").
+      // The metadata reader (std::ifstream) and FFmpeg open the file themselves, not
+      // through the Win32 layer, so both get the host path it stands for.
+      std::string hostPath(256, '\0');
+      if (filename) {
+        std::size_t length = faf_posixHostPathA(filename, hostPath.data(), hostPath.size());
+        if (length >= hostPath.size()) {
+          hostPath.resize(length);
+          length = faf_posixHostPathA(filename, hostPath.data(), hostPath.size());
+        }
+        hostPath.resize(length);
+        filename = hostPath.c_str();
+      }
+#endif
       std::string error;
       if (!ReadMetadata(filename, s.metadata, error))
         throw std::runtime_error(error);

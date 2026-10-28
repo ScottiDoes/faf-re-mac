@@ -7,11 +7,16 @@
 //                     and frame, minus the window, the device and rendering
 //   ReplayReport.cpp  the run's result: checksum mismatches seen in the log, the last beat,
 //                     the exit reason, and the FAF_REPLAY_RESULT line
+//   ReplayChecks.cpp  the replay's recorded player checksums: how many the run compared
+//   FpcrWatch.cpp     every thread's FPCR (sim workers included) must stay 0
 //
 // Usage and expected output: macos/porting/runner.md.
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "gpg/core/time/Timer.h"
 #include "moho/app/CScApp.h"
@@ -43,6 +48,16 @@ namespace faf_runner
   // "Checksum for beat N mismatched" warnings (a gpg log target). Call once, first.
   void ReportInit(const char* replayId);
 
+  // Verdicts (verdict=<v>), with the exit status: pass 0; mismatch 1 (any checksum mismatched);
+  // incomplete 2 (the run did not end with gameover or end-of-replay); fpcr 2 (a thread ran
+  // with FPCR != 0); unverified 2 (the run compared no recorded checksum, or the replay's
+  // checksums could not be counted).
+  inline constexpr const char* kVerdictPass = "pass";
+  inline constexpr const char* kVerdictMismatch = "mismatch";
+  inline constexpr const char* kVerdictIncomplete = "incomplete";
+  inline constexpr const char* kVerdictFpcr = "fpcr";
+  inline constexpr const char* kVerdictUnverified = "unverified";
+
   // Records why the run ends; the first reason given wins.
   void ReportSetExitReason(const char* reason);
   [[nodiscard]] const char* ReportGetExitReason();
@@ -53,17 +68,59 @@ namespace faf_runner
 
   [[nodiscard]] int ReportMismatchCount();
 
-  // Prints "FAF_REPLAY_RESULT replay=<id> beats=<last beat> mismatches=<n> exit=<reason>"
-  // to stdout once (later calls do nothing) and logs it. `fallbackReason` is used when no
-  // reason was recorded. Returns the process exit code: 0 pass, 1 mismatches, 2 the run
-  // did not complete. `writeToLog` false keeps it off the gpg log (the die handler).
+  // Prints
+  //   FAF_REPLAY_RESULT replay=<id> beats=<last beat> tick=<game tick> recorded=<r>
+  //     checked=<c> mismatches=<n> exit=<reason> verdict=<v>
+  // (one line) to stdout once (later calls do nothing) and logs it. recorded and checked are
+  // -1 when the replay's checksums could not be counted (ReplayChecks*). `fallbackReason` is
+  // used when no reason was recorded. Returns the process exit code of the verdict (above).
+  // `writeToLog` false keeps it off the gpg log (the die handler).
   int ReportFinish(const char* fallbackReason, bool writeToLog = true);
 
-  // Async-signal-safe form for the crash handler: exit=crash-<signal name>.
+  // Async-signal-safe form for the crash handler: exit=crash-<signal name>, verdict mismatch
+  // or incomplete.
   void ReportFinishFromSignal(int signalNumber);
 
   // Mirrors every log line to stderr (/echolog).
   void ReportEchoLogToStderr();
+
+  // --- The replay's recorded checksums (ReplayChecks.cpp) ----------------------------------
+
+  struct ReplayChecksSummary
+  {
+    std::int64_t recorded = 0;    // CMDST_VerifyChecksum records in the command stream
+    std::int64_t streamBeats = 0; // CMDST_Advance records
+    bool truncated = false;       // the stream ends in a message the engine cannot read
+    // Sim::mCurBeat when the sim compares each record it compares, in stream order.
+    std::vector<std::int64_t> comparedAt;
+  };
+
+  // Reads a .scfareplay image (header, then the command stream) the way the engine does.
+  // False (with `error`) when the header is not a replay header.
+  [[nodiscard]] bool ReplayChecksParse(
+    const std::uint8_t* data, std::size_t size, ReplayChecksSummary* out, std::string* error
+  );
+
+  // Loads the /replay file's checksum records for the result line. Call once, before the run.
+  [[nodiscard]] bool ReplayChecksLoad(const char* path, std::string* error);
+
+  // -1 until ReplayChecksLoad succeeded.
+  [[nodiscard]] std::int64_t ReplayChecksRecorded();
+  [[nodiscard]] std::int64_t ReplayChecksComparable();  // compared when the whole stream plays
+  [[nodiscard]] std::int64_t ReplayChecksStreamBeats();
+
+  // Records the sim had compared once the user side applied `appliedSyncPackets` sync
+  // packets (the opening one included). Async-signal-safe.
+  [[nodiscard]] std::int64_t ReplayChecksCompared(std::uint64_t appliedSyncPackets);
+
+  // --- Per-thread FPCR check (FpcrWatch.cpp) ------------------------------------------------
+
+  // Reads the FPCR of every thread of the process; false when one is not 0 (logged, with the
+  // thread). The run's verdict is fpcr when any sample found one.
+  bool FpcrWatchSample();
+  [[nodiscard]] int FpcrWatchSamples();
+  [[nodiscard]] int FpcrWatchBadReads();
+  void FpcrWatchLog();
 
   // --- Switches (RunnerMain.cpp) ------------------------------------------------------------
 
@@ -74,6 +131,7 @@ namespace faf_runner
     double timeoutSeconds = 0.0;     // /timeout <s>: wall-clock limit (0: none)
     int benchSpeed = 0;              // /benchspeed <n>
     bool haveBenchSpeed = false;
+    bool noFpcrCheck = false;        // /nofpcrcheck: no per-thread FPCR sampling
   };
 
   [[nodiscard]] const RunnerOptions& GetOptions();
@@ -111,6 +169,7 @@ namespace faf_runner
     void ApplyRunnerGameSpeed();
     void NoteProgress();
     void LogSimRate();
+    void SampleFpcr(bool force);
 
     using Clock = std::chrono::steady_clock;
 
@@ -131,5 +190,6 @@ namespace faf_runner
     Clock::time_point mFirstTickTime{};
     std::int32_t mFirstTick = -1;
     Clock::time_point mLastTickChangeTime{};
+    Clock::time_point mLastFpcrSample{};
   };
 } // namespace faf_runner

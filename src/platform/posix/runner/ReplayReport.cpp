@@ -6,7 +6,9 @@
 //   "Checksum for beat %d mismatched: %s (sim) != %s (%s)."
 // on every platform (docs/PR_REPLAY_CHECK.md). A gpg log target here sees each such line on
 // whichever thread logs it (dispatch is synchronous, under the log context's lock), so the
-// count needs no change to the sim.
+// count needs no change to the sim. A match leaves no trace, so how many recorded checksums
+// were compared (checked=) comes from the replay itself (ReplayChecks.cpp), and a run that
+// compared none cannot pass.
 
 #include "platform/posix/runner/Runner.h"
 
@@ -106,6 +108,32 @@ namespace
             std::strcmp(reason, faf_runner::kExitEndOfReplay) == 0);
   }
 
+  [[nodiscard]] std::int64_t Checked()
+  {
+    return faf_runner::ReplayChecksCompared(static_cast<std::uint64_t>(gAppliedBeats.load()));
+  }
+
+  // The verdict and its exit status (Runner.h). Async-signal-safe.
+  [[nodiscard]] const char* Verdict(const char* const reason, int* const exitCode)
+  {
+    if (gMismatchCount.load() > 0) {
+      *exitCode = 1;
+      return faf_runner::kVerdictMismatch;
+    }
+    *exitCode = 2;
+    if (!IsPassingReason(reason)) {
+      return faf_runner::kVerdictIncomplete;
+    }
+    if (faf_runner::FpcrWatchBadReads() > 0) {
+      return faf_runner::kVerdictFpcr;
+    }
+    if (Checked() <= 0) {
+      return faf_runner::kVerdictUnverified;
+    }
+    *exitCode = 0;
+    return faf_runner::kVerdictPass;
+  }
+
   // --- Async-signal-safe formatting ----------------------------------------------------------
   void AppendText(char* const buffer, std::size_t& used, const std::size_t capacity, const char* text)
   {
@@ -152,18 +180,32 @@ namespace
     }
   }
 
-  std::size_t FormatResult(char* const buffer, const std::size_t capacity, const char* const reason, const char* const reasonSuffix)
+  std::size_t FormatResult(
+    char* const buffer,
+    const std::size_t capacity,
+    const char* const reason,
+    const char* const reasonSuffix,
+    const char* const verdict
+  )
   {
     std::size_t used = 0;
     AppendText(buffer, used, capacity, "FAF_REPLAY_RESULT replay=");
     AppendText(buffer, used, capacity, gReplayId);
     AppendText(buffer, used, capacity, " beats=");
     AppendInteger(buffer, used, capacity, LastBeat());
+    AppendText(buffer, used, capacity, " tick=");
+    AppendInteger(buffer, used, capacity, gGameTick.load());
+    AppendText(buffer, used, capacity, " recorded=");
+    AppendInteger(buffer, used, capacity, faf_runner::ReplayChecksRecorded());
+    AppendText(buffer, used, capacity, " checked=");
+    AppendInteger(buffer, used, capacity, Checked());
     AppendText(buffer, used, capacity, " mismatches=");
     AppendInteger(buffer, used, capacity, gMismatchCount.load());
     AppendText(buffer, used, capacity, " exit=");
     AppendText(buffer, used, capacity, reason);
     AppendText(buffer, used, capacity, reasonSuffix);
+    AppendText(buffer, used, capacity, " verdict=");
+    AppendText(buffer, used, capacity, verdict);
     buffer[used] = '\0';
     return used;
   }
@@ -216,15 +258,15 @@ int faf_runner::ReportFinish(const char* const fallbackReason, const bool writeT
 {
   ReportSetExitReason(fallbackReason != nullptr ? fallbackReason : kExitRequested);
   const char* const reason = gExitReason.load();
-  const int mismatches = gMismatchCount.load();
-  const int exitCode = mismatches > 0 ? 1 : (IsPassingReason(reason) ? 0 : 2);
+  int exitCode = 2;
+  const char* const verdict = Verdict(reason, &exitCode);
 
   if (gResultPrinted.exchange(true)) {
     return exitCode;
   }
 
-  char line[256];
-  (void)FormatResult(line, sizeof(line), reason, "");
+  char line[384];
+  (void)FormatResult(line, sizeof(line), reason, "", verdict);
   if (writeToLog) {
     gpg::Logf("%s", line);
     gpg::Logf(
@@ -232,6 +274,13 @@ int faf_runner::ReportFinish(const char* const fallbackReason, const bool writeT
       static_cast<long long>(LastBeat()),
       static_cast<int>(gGameTick.load()),
       gFirstMismatchBeat.load()
+    );
+    gpg::Logf(
+      "faf_replay: recorded checksums %lld, compared %lld (%lld when the whole stream plays), stream beats %lld",
+      static_cast<long long>(ReplayChecksRecorded()),
+      static_cast<long long>(Checked()),
+      static_cast<long long>(ReplayChecksComparable()),
+      static_cast<long long>(ReplayChecksStreamBeats())
     );
   }
   std::fflush(stderr);
@@ -248,8 +297,10 @@ void faf_runner::ReportFinishFromSignal(const int signalNumber)
   if (gResultPrinted.exchange(true)) {
     return;
   }
-  char line[256];
-  std::size_t used = FormatResult(line, sizeof(line) - 1, "crash-", SignalName(signalNumber));
+  int exitCode = 2;
+  const char* const verdict = gMismatchCount.load() > 0 ? Verdict(nullptr, &exitCode) : kVerdictIncomplete;
+  char line[384];
+  std::size_t used = FormatResult(line, sizeof(line) - 1, "crash-", SignalName(signalNumber), verdict);
   line[used++] = '\n';
   (void)::write(STDOUT_FILENO, line, used);
 }
