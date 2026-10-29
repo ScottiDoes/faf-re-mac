@@ -3303,8 +3303,14 @@ namespace
       return nullptr;
     }
 
-    CAiTarget target{};
-    target.DecodeFromSSTITarget(commandIssueData.mTarget, sim);
+    // 0x006F1530..0x006F1596 tests the no-rush circle against the issue data's raw target lanes,
+    // its kind at +0x10 and its position at +0x18/+0x20, and never decodes the target.
+    // CAiTarget::DecodeFromSSTITarget would pick a random aim point on an entity target
+    // (Unit::PickTargetPoint): one sim RNG draw the binary does not make, which shifts every
+    // later draw (replay 27960975 desynced at beat 31123 on a factory order with a unit target).
+    CAiTarget noRushTarget{};
+    noRushTarget.targetType = commandIssueData.mTarget.mType;
+    noRushTarget.position = commandIssueData.mTarget.mPos;
 
     CUnitCommand* issuedCommand = nullptr;
     for (Entity* const* it = selectedUnits.mVec.begin(); it != selectedUnits.mVec.end(); ++it) {
@@ -3317,7 +3323,7 @@ namespace
         continue;
       }
 
-      if (IsOutsideArmyNoRushRadius(unit->ArmyRef, target)) {
+      if (IsOutsideArmyNoRushRadius(unit->ArmyRef, noRushTarget)) {
         continue;
       }
 

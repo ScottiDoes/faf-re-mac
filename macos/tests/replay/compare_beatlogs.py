@@ -31,6 +31,26 @@ def lines_of(path):
         return [line.rstrip(b"\r\n").decode("latin1") for line in f]
 
 
+NUMBER = re.compile(r"-?\d+\.\d+")
+
+
+def same_line(a, b):
+    """Equal, or equal but for printed decimals one unit apart in their last digit: the MSVC CRT
+    rounds a tie (616.9453125 at %f) away from zero, Apple's printf to even. The float bits the
+    logs print in hex next to the sim state are compared exactly."""
+    if a == b:
+        return True
+    if NUMBER.sub("#", a) != NUMBER.sub("#", b):
+        return False
+    for x, y in zip(NUMBER.findall(a), NUMBER.findall(b)):
+        if x == y:
+            continue
+        digits = len(x.split(".")[1])
+        if digits != len(y.split(".")[1]) or abs(float(x) - float(y)) > 1.5 * 10 ** -digits:
+            return False
+    return True
+
+
 def owner(lines, index):
     """The entity block a line is in: the nearest entity id and blueprint lines above it."""
     entity = blueprint = section = None
@@ -72,7 +92,7 @@ def main(argv):
     for beat in common:
         la, lb = lines_of(a[beat]), lines_of(b[beat])
         n = min(len(la), len(lb))
-        first = next((i for i in range(n) if la[i] != lb[i]), None)
+        first = next((i for i in range(n) if not same_line(la[i], lb[i])), None)
         if first is None and len(la) == len(lb):
             continue
         if first is None:
