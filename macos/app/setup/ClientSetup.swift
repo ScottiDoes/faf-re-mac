@@ -356,7 +356,10 @@ enum ClientRunner {
 enum ClientSettings {
     /// Sets the executable decorator (and the Forged Alliance location, when given).
     static func apply(gamePath: String?) throws -> URL {
-        try rewrite { root in
+        guard !Places.translocated else {
+            throw SetupError("macOS is running FAF Native from a temporary copy, whose path the client can't keep. Move the app to Applications, clear its download flag, open it again, then apply.")
+        }
+        return try rewrite { root in
             var fa = root["forgedAlliance"] as? [String: Any] ?? [:]
             fa["executableDecorator"] = Places.launcherLine
             if let gamePath { fa["installationPath"] = gamePath }

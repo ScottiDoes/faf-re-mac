@@ -22,6 +22,17 @@ enum Places {
     static var gameApp: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/FAF Native Game.app") }
     /// The line for the client's executable decorator setting.
     static var launcherLine: String { "\"\(launcher.path)\" \"%s\"" }
+    /// macOS runs an app that still carries the download flag from a hidden temporary copy ("App
+    /// Translocation", .../AppTranslocation/...). That path changes, so the client can't keep it as
+    /// its launcher. (FAF_NATIVE_TEST_TRANSLOCATED=1 stands for it in a test home.)
+    static var translocated: Bool {
+        if ProcessInfo.processInfo.environment["FAF_NATIVE_TEST_HOME"] != nil {
+            return ProcessInfo.processInfo.environment["FAF_NATIVE_TEST_TRANSLOCATED"] == "1"
+        }
+        return Bundle.main.bundlePath.contains("/AppTranslocation/")
+    }
+    /// The command that clears the download flag once the app is in Applications.
+    static let clearFlagCommand = "xattr -dr com.apple.quarantine \"/Applications/FAF Native.app\""
 }
 
 /// What the setup remembers between runs (config.json in Places.appSupport).

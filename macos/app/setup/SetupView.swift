@@ -67,6 +67,7 @@ struct SetupView: View {
 
     var body: some View {
         Form {
+            if Places.translocated { translocationSection }
             gameSection
             clientSection
             appSection
@@ -99,6 +100,18 @@ struct SetupView: View {
             Button("OK") { model.alert = nil }
         } message: {
             Text(model.alert ?? "")
+        }
+    }
+
+    // MARK: Temporary copy
+
+    private var translocationSection: some View {
+        Section {
+            StatusRow(kind: .problem, title: "macOS is running FAF Native from a temporary copy",
+                      detail: "The app still carries the download flag, so macOS runs it from a hidden copy whose path changes, "
+                          + "and the FAF client would lose track of it. Quit FAF Native, move it into Applications with Finder, "
+                          + "run this command in Terminal once, and open it again:")
+            CopyField(text: Places.clearFlagCommand)
         }
     }
 
@@ -281,7 +294,7 @@ struct SetupView: View {
             } else {
                 StatusRow(kind: .info, title: "A FAF client has to start its games with FAF Native",
                           detail: "Its executable decorator setting (Forged Alliance) is this line; FAF Native can set it after the client's first start.")
-                CopyField(text: Places.launcherLine)
+                if !Places.translocated { CopyField(text: Places.launcherLine) }
             }
         case .none, .otherLauncher:
             if case .otherLauncher(let other) = model.client.hookup {
@@ -291,9 +304,11 @@ struct SetupView: View {
                           detail: "Until then, starting a game in the client tries to start the Windows game.")
             }
             applyRow
-            Text("Or set it yourself: in the client's settings, the executable decorator for Forged Alliance is this line.")
-                .font(.callout).foregroundStyle(.secondary)
-            CopyField(text: Places.launcherLine)
+            if !Places.translocated {   // the temporary copy's path would not last
+                Text("Or set it yourself: in the client's settings, the executable decorator for Forged Alliance is this line.")
+                    .font(.callout).foregroundStyle(.secondary)
+                CopyField(text: Places.launcherLine)
+            }
         }
     }
 
@@ -313,7 +328,10 @@ struct SetupView: View {
     }
 
     @ViewBuilder private var applyRow: some View {
-        if model.clientPrefsExist {
+        if Places.translocated {
+            Text("First move FAF Native into Applications and open it from there (see the top of this window); then FAF Native can do this for you.")
+                .font(.callout).foregroundStyle(.secondary)
+        } else if model.clientPrefsExist {
             HStack {
                 Text(model.clientRunning ? "Quit the FAF client first (Stop FAF Client above), then let FAF Native do it."
                                          : "FAF Native can do it for you, keeping a backup of the client's settings.")

@@ -11,6 +11,8 @@
 #              downloads and installs the FAF client (about 260 MB, once; later runs reuse it)
 #   running-*  with CLIENT_INSTALL=1 only: that home with a client that has logged in and runs
 #              (FAF_NATIVE_TEST_CLIENT_RUNNING=1)
+#   translocated-*  with CLIENT_INSTALL=1 only: the app opened from macOS's temporary copy of a
+#              downloaded app (FAF_NATIVE_TEST_TRANSLOCATED=1)
 # Usage: [CLIENT_INSTALL=1] macos/tests/app/snapshot_setup.sh
 set -eu
 root=${0:A:h:h:h:h}
@@ -50,4 +52,6 @@ if [[ ${CLIENT_INSTALL:-0} == 1 ]]; then
     # The same with a running client that has logged in once: Reset Window, Stop, "Is Running".
     mkdir -p "$ch/.faforever"; [[ -f $ch/.faforever/client.prefs ]] || print '{"mainWindow": {"x": 4000, "y": 3000}}' > "$ch/.faforever/client.prefs"
     FAF_NATIVE_TEST_HOME=$ch FAF_NATIVE_TEST_CLIENT_RUNNING=1 "$snap" "$out/running"
+    # Opened from macOS's temporary copy of a downloaded app (App Translocation).
+    FAF_NATIVE_TEST_HOME=$ch FAF_NATIVE_TEST_TRANSLOCATED=1 "$snap" "$out/translocated"
 fi
