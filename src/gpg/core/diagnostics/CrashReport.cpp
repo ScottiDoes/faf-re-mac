@@ -65,24 +65,14 @@ namespace gpg::diag
     }
 
     // ------------------------------------------------------------------
-    // Path resolution (beside the executable, like faf_diag.log)
+    // Path resolution (beside the executable, like faf_diag.log; DiagnosticsDirectory)
     // ------------------------------------------------------------------
 
     void ResolveExeDir(char* outDir, const std::size_t bytes)
     {
-      char exePath[MAX_PATH * 2] = {};
-      const DWORD written = ::GetModuleFileNameA(nullptr, exePath, static_cast<DWORD>(sizeof(exePath)));
-      if (written == 0u || written >= sizeof(exePath)) {
+      if (!DiagnosticsDirectory(outDir, bytes)) {
         (void)::strcpy_s(outDir, bytes, ".");
-        return;
       }
-      char* lastSlash = std::strrchr(exePath, '\\');
-      if (lastSlash == nullptr) {
-        (void)::strcpy_s(outDir, bytes, ".");
-        return;
-      }
-      *(lastSlash + 1) = '\0';
-      (void)::strcpy_s(outDir, bytes, exePath);
     }
 
   } // namespace

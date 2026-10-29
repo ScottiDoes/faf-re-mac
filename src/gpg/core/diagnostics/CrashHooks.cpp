@@ -17,6 +17,13 @@
 #include <cstring>
 #include <exception>
 
+#if defined(FAF_POSIX)
+#include <sys/stat.h>
+
+#include <algorithm>
+#include <string>
+#endif
+
 #include "gpg/core/diagnostics/CrashHooks.h"
 #include "gpg/core/diagnostics/CrashReport.h"
 
@@ -49,27 +56,49 @@ namespace gpg::diag
 
   } // namespace
 
-  // The log sits beside the executable, not in whatever the process happened to
-  // make its working directory, so it can actually be found and handed over.
+  // Diagnostics sit beside the executable, not in whatever the process happened to
+  // make its working directory, so they can actually be found and handed over.
+  // macOS addition: a game running from an app bundle (Contents/MacOS) writes them to
+  // ~/Library/Logs/FAF Native instead, since files written into the bundle would break
+  // its code signature.
+  bool DiagnosticsDirectory(char* const outDir, const std::size_t bytes)
+  {
+    char exePath[MAX_PATH * 2] = {};
+    const DWORD written = ::GetModuleFileNameA(nullptr, exePath, static_cast<DWORD>(sizeof(exePath)));
+    char* const lastSlash = (written == 0u || written >= sizeof(exePath)) ? nullptr : std::strrchr(exePath, '\\');
+    if (lastSlash == nullptr) {
+      outDir[0] = '\0';
+      return false;
+    }
+    *(lastSlash + 1) = '\0';
+#if defined(FAF_POSIX)
+    constexpr char kBundleExeDir[] = ".app\\Contents\\MacOS\\";
+    constexpr std::size_t kBundleExeDirLength = sizeof(kBundleExeDir) - 1u;
+    const std::size_t length = std::strlen(exePath);
+    const char* const home = std::getenv("HOME");
+    if (length >= kBundleExeDirLength && std::strcmp(exePath + length - kBundleExeDirLength, kBundleExeDir) == 0 &&
+        home != nullptr && home[0] == '/') {
+      const std::string logs = std::string(home) + "/Library/Logs/FAF Native";
+      (void)::mkdir(logs.c_str(), 0755);
+      std::string windows = "C:" + logs + "/";
+      std::replace(windows.begin(), windows.end(), '/', '\\');
+      (void)::strcpy_s(outDir, bytes, windows.c_str());
+      return true;
+    }
+#endif
+    (void)::strcpy_s(outDir, bytes, exePath);
+    return true;
+  }
+
   const char* DiagLogPath()
   {
     static char sPath[MAX_PATH * 2] = {};
     static bool sResolved = false;
     if (!sResolved) {
       sResolved = true;
-      char exePath[MAX_PATH] = {};
-      const DWORD written = ::GetModuleFileNameA(nullptr, exePath, static_cast<DWORD>(sizeof(exePath)));
-      if (written == 0u || written >= sizeof(exePath)) {
-        (void)::strcpy_s(sPath, sizeof(sPath), "faf_diag.log");
-      } else {
-        char* const lastSlash = std::strrchr(exePath, '\\');
-        if (lastSlash != nullptr) {
-          *(lastSlash + 1) = '\0';
-        } else {
-          exePath[0] = '\0';
-        }
-        (void)::sprintf_s(sPath, sizeof(sPath), "%sfaf_diag.log", exePath);
-      }
+      char directory[MAX_PATH * 2] = {};
+      (void)DiagnosticsDirectory(directory, sizeof(directory));
+      (void)::sprintf_s(sPath, sizeof(sPath), "%sfaf_diag.log", directory);
     }
     return sPath;
   }

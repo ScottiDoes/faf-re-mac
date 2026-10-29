@@ -33,7 +33,14 @@ namespace gpg::diag
    */
   void InstallCrtDiagnosticHooks(const CrtDiagOptions& options = {});
 
-  /** Log file path beside the executable (faf_diag.log). */
+  /**
+   * The folder for faf_diag.log and the crash reports, with a trailing backslash: the
+   * executable's own, or ~/Library/Logs/FAF Native for a macOS app bundle. False (and
+   * an empty string) when the executable's path is unknown.
+   */
+  bool DiagnosticsDirectory(char* outDir, std::size_t bytes);
+
+  /** Log file path in DiagnosticsDirectory (faf_diag.log). */
   const char* DiagLogPath();
 
   /** Appends one line to faf_diag.log; open/write/close, crash-safe. */

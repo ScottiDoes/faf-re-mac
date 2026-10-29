@@ -5,6 +5,12 @@
 #if defined(FAF_POSIX)
 #include <dlfcn.h>
 #include <sys/stat.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+
+#include <climits>
+#include <cstdint>
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -45,14 +51,44 @@ namespace gpg::gal::vulkan
     }
 
     /**
+     * The Contents folder of the app bundle the game runs from, when that bundle carries
+     * its own Vulkan loader (Contents/Frameworks/libvulkan.1.dylib, the release layout
+     * macos/app/make_app.sh builds), else empty. The bundle's loader, MoltenVK and DXC win
+     * over the SDK's.
+     */
+    [[nodiscard]] std::string BundleContents()
+    {
+#if defined(__APPLE__)
+      char path[PATH_MAX]{};
+      std::uint32_t size = sizeof(path);
+      char resolved[PATH_MAX]{};
+      if (::_NSGetExecutablePath(path, &size) != 0 || ::realpath(path, resolved) == nullptr) {
+        return {};
+      }
+      std::string contents = resolved;
+      for (int level = 0; level < 2; ++level) { // the executable, then its folder (Contents/MacOS)
+        const std::size_t slash = contents.find_last_of('/');
+        if (slash == std::string::npos || slash == 0U) {
+          return {};
+        }
+        contents.resize(slash);
+      }
+      return Exists(contents + "/Frameworks/libvulkan.1.dylib") ? contents : std::string();
+#else
+      return {};
+#endif
+    }
+
+    /**
      * Points the loader at a driver and at the validation layers before it is loaded
      * (it reads these variables when it scans for drivers and layers). Variables the
-     * user set win. The driver is the SDK's MoltenVK, or its KosmicKrisp with
-     * FAF_VULKAN_DRIVER=kosmickrisp (or any ICD manifest given by path).
+     * user set win. The driver is the app bundle's MoltenVK (else the SDK's), or the SDK's
+     * KosmicKrisp with FAF_VULKAN_DRIVER=kosmickrisp (or any ICD manifest given by path).
      */
     void ConfigureLoaderEnvironment()
     {
       const std::string sdk = SdkDirectory();
+      const std::string bundle = BundleContents();
       if (IsSet("VK_DRIVER_FILES") || IsSet("VK_ICD_FILENAMES") || IsSet("VK_ADD_DRIVER_FILES")) {
         const char* const name = IsSet("VK_DRIVER_FILES") ? "VK_DRIVER_FILES" : IsSet("VK_ICD_FILENAMES") ? "VK_ICD_FILENAMES" : "VK_ADD_DRIVER_FILES";
         sDriverSelection = std::string("as set by ") + name + "=" + std::getenv(name);
@@ -72,9 +108,10 @@ namespace gpg::gal::vulkan
             gpg::Warnf("Vulkan: FAF_VULKAN_DRIVER=%s is not moltenvk, kosmickrisp or a manifest path; using MoltenVK", choice.c_str());
           }
           lower = "moltenvk";
-          manifest = sdk + "/share/vulkan/icd.d/MoltenVK_icd.json";
+          manifest = bundle.empty() ? sdk + "/share/vulkan/icd.d/MoltenVK_icd.json"
+                                    : bundle + "/Resources/vulkan/icd.d/MoltenVK_icd.json";
         }
-        if (Exists(manifest) && (!sdk.empty() || manifest == choice)) {
+        if (Exists(manifest) && (!sdk.empty() || !bundle.empty() || manifest == choice)) {
           ::setenv("VK_DRIVER_FILES", manifest.c_str(), 1);
           sDriverSelection = ((manifest == choice) ? std::string("manifest") : lower) + " (" + manifest + ")";
         } else {
@@ -91,10 +128,10 @@ namespace gpg::gal::vulkan
     }
 
     /**
-     * The Vulkan loader of the POSIX build: FAF_VULKAN_LIBRARY when set, else the
-     * configured Vulkan SDK's loader, else the Khronos loader by name (Homebrew,
-     * DYLD_LIBRARY_PATH; it finds MoltenVK through its ICD manifest), else MoltenVK
-     * itself, which exports vkGetInstanceProcAddr.
+     * The Vulkan loader of the POSIX build: FAF_VULKAN_LIBRARY when set, else the app
+     * bundle's loader, else the configured Vulkan SDK's loader, else the Khronos loader by
+     * name (Homebrew, DYLD_LIBRARY_PATH; it finds MoltenVK through its ICD manifest), else
+     * MoltenVK itself, which exports vkGetInstanceProcAddr.
      */
     HMODULE OpenVulkanLibrary()
     {
@@ -107,9 +144,15 @@ namespace gpg::gal::vulkan
         }
         return static_cast<HMODULE>(library);
       }
-      const std::string sdkLoader = SdkDirectory() + "/lib/libvulkan.1.dylib";
-      if (!SdkDirectory().empty() && Exists(sdkLoader)) {
-        if (void* const library = ::dlopen(sdkLoader.c_str(), RTLD_NOW | RTLD_LOCAL); library != nullptr) {
+      const std::string bundle = BundleContents();
+      std::string ownLoader;
+      if (!bundle.empty()) {
+        ownLoader = bundle + "/Frameworks/libvulkan.1.dylib";
+      } else if (!SdkDirectory().empty()) {
+        ownLoader = SdkDirectory() + "/lib/libvulkan.1.dylib";
+      }
+      if (Exists(ownLoader)) {
+        if (void* const library = ::dlopen(ownLoader.c_str(), RTLD_NOW | RTLD_LOCAL); library != nullptr) {
           return static_cast<HMODULE>(library);
         }
       }

@@ -82,10 +82,15 @@ namespace faf_posix::dxc
       if (const char* const configured = std::getenv("FAF_DXC_DIR"); configured != nullptr && configured[0] != '\0') {
         candidates.push_back(WithSlash(configured) + kLibraryName);
       }
+      const std::string directory = ExecutableDirectory();
+      if (!directory.empty()) {
+        // The app bundle's own copy (Contents/Frameworks, macos/app/make_app.sh) wins over the SDK's.
+        candidates.push_back(directory + "../Frameworks/" + kLibraryName);
+      }
 #if defined(FAF_VULKAN_SDK_DIR)
       candidates.push_back(std::string(FAF_VULKAN_SDK_DIR "/lib/") + kLibraryName);
 #endif
-      if (const std::string directory = ExecutableDirectory(); !directory.empty()) {
+      if (!directory.empty()) {
         candidates.push_back(directory + kLibraryName);
       }
       candidates.push_back(kLibraryName); // DYLD_LIBRARY_PATH and the default search path
@@ -108,7 +113,7 @@ namespace faf_posix::dxc
         }
       }
       if (module == nullptr) {
-        status.error = std::string(kLibraryName) + " not found in FAF_DXC_DIR, the Vulkan SDK"
+        status.error = std::string(kLibraryName) + " not found in FAF_DXC_DIR, the app's Frameworks, the Vulkan SDK"
 #if defined(FAF_VULKAN_SDK_DIR)
           " (" FAF_VULKAN_SDK_DIR "/lib)"
 #endif
