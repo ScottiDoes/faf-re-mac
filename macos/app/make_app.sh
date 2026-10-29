@@ -1,17 +1,20 @@
 #!/bin/zsh
-# Packages the game as a self-contained macOS app, build/app/FAF Native.app: the game plus the
-# libraries it otherwise takes from Homebrew and the LunarG Vulkan SDK, so at run time it needs
-# nothing outside the bundle but macOS and the game files.
-#   Contents/MacOS/faf_game                            the game (build/macos/faf_game)
-#   Contents/Frameworks/libSDL3.0.dylib                Homebrew sdl3: window, input, audio output
-#   Contents/Frameworks/libFAudio.0.dylib              Homebrew faudio: XACT sound (FactXact.cpp)
-#   Contents/Frameworks/libvulkan.1.dylib              Vulkan SDK: loader   } the game takes these
-#   Contents/Frameworks/libMoltenVK.dylib              Vulkan SDK: driver   } before the SDK's
-#   Contents/Frameworks/libdxcompiler.dylib            Vulkan SDK: DXC      } (VulkanLoader.cpp,
-#   Contents/Resources/vulkan/icd.d/MoltenVK_icd.json  MoltenVK's manifest  }  DxcBridge.cpp)
-#   Contents/Resources/faf-launch                      the FAF client's launcher (macos/app/faf-launch)
-#   Contents/Resources/licenses/                       the bundled libraries' licences
-# The game and FAudio reach SDL3 and FAudio through @rpath = Contents/Frameworks (Homebrew's
+# Packages the game as a self-contained macOS app, build/app/FAF Native.app: a setup and status
+# window, and the game with the libraries it otherwise takes from Homebrew and the LunarG Vulkan
+# SDK, so at run time it needs nothing outside the bundle but macOS and the game files.
+#   Contents/MacOS/FAF Native             the setup and status window (macos/app/setup, SwiftUI)
+#   Contents/Resources/faf-launch         the FAF client's launcher (macos/app/faf-launch)
+#   Contents/Resources/licenses/          the bundled libraries' licences
+#   Contents/Helpers/FAF Native Game.app  the game, an app of its own (so macOS and per-app tools
+#                                         see it as one while it runs; Game-Info.plist):
+#     Contents/MacOS/faf_game                            build/macos/faf_game
+#     Contents/Frameworks/libSDL3.0.dylib                Homebrew sdl3: window, input, audio output
+#     Contents/Frameworks/libFAudio.0.dylib              Homebrew faudio: XACT sound (FactXact.cpp)
+#     Contents/Frameworks/libvulkan.1.dylib              Vulkan SDK: loader   } the game takes these
+#     Contents/Frameworks/libMoltenVK.dylib              Vulkan SDK: driver   } before the SDK's
+#     Contents/Frameworks/libdxcompiler.dylib            Vulkan SDK: DXC      } (VulkanLoader.cpp,
+#     Contents/Resources/vulkan/icd.d/MoltenVK_icd.json  MoltenVK's manifest  }  DxcBridge.cpp)
+# The game and FAudio reach SDL3 and FAudio through @rpath = the game app's Frameworks (Homebrew's
 # rpath is replaced); the check at the end fails the build if any load command still points
 # outside the bundle. FFmpeg is linked in statically (LGPL v2.1+, macos/ffmpeg.cmake). The game
 # writes faf_diag.log and crash reports to ~/Library/Logs/FAF Native, not into the bundle
@@ -23,6 +26,8 @@
 #   OUT            folder for the app (default build/app)
 #   SIGN_IDENTITY  codesign identity (default "-", ad hoc). Any other identity also gets the
 #                  hardened runtime and a secure timestamp, as notarization requires.
+#   BUNDLE_ID      the app's bundle identifier (default local.faf-re-mac); the game app's is
+#                  <BUNDLE_ID>.game
 #   VERSION_NOTE   added to the version line (Info.plist FAFNativeVersion, deploy.sh's VERSION)
 # Prints the app's path and its version line.
 set -eu
@@ -31,6 +36,7 @@ EXE=${FAF_GAME_EXE:-$root/build/macos/faf_game}
 OUT=${OUT:-$root/build/app}
 OUT=${OUT:A}
 SIGN_IDENTITY=${SIGN_IDENTITY:--}
+BUNDLE_ID=${BUNDLE_ID:-local.faf-re-mac}
 SDK=$HOME/Gaming/VulkanSDK/1.4.363.0/macOS   # macos/CMakeLists.txt FAF_VULKAN_SDK
 fail() { print -u2 "make_app: $*"; exit 1 }
 # install_name_tool and codesign, without their expected notes (the old signature goes away and
@@ -56,24 +62,33 @@ version="$commit${dirty:+ + uncommitted: ${dirty% }}, built $(date '+%F %R')${VE
 minos=$(otool -l "$EXE" | awk '/LC_BUILD_VERSION/ {b = 1} b && $1 == "minos" {print $2; exit}')
 
 app=$OUT/FAF\ Native.app
+game=$app/Contents/Helpers/FAF\ Native\ Game.app
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources/vulkan/icd.d" "$app/Contents/Resources/licenses"
-sed -e "s|@BUILD@|$build|" -e "s|@MINOS@|${minos:-14.0}|" -e "s|@VERSION@|${version//&/\\&}|" \
-    "$root/macos/app/Info.plist" > "$app/Contents/Info.plist"
-plutil -lint -s "$app/Contents/Info.plist" || fail "Info.plist does not parse"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/licenses" \
+    "$game/Contents/MacOS" "$game/Contents/Frameworks" "$game/Contents/Resources/vulkan/icd.d"
+for plist in Info Game-Info; do
+    [[ $plist == Info ]] && dest=$app/Contents/Info.plist || dest=$game/Contents/Info.plist
+    sed -e "s|@BUNDLE_ID@|$BUNDLE_ID|" -e "s|@BUILD@|$build|" -e "s|@MINOS@|${minos:-14.0}|" \
+        -e "s|@VERSION@|${version//&/\\&}|" "$root/macos/app/$plist.plist" > "$dest"
+    plutil -lint -s "$dest" || fail "$plist.plist does not parse"
+done
 
-fw=$app/Contents/Frameworks
-cp "$EXE" "$app/Contents/MacOS/faf_game"
+# The setup window: Swift, compiled straight into the app (no Xcode project).
+xcrun --sdk macosx swiftc -parse-as-library -O -target arm64-apple-macos14.0 \
+    -o "$app/Contents/MacOS/FAF Native" "$root"/macos/app/setup/*.swift || fail "the setup app does not compile"
+
+fw=$game/Contents/Frameworks
+cp "$EXE" "$game/Contents/MacOS/faf_game"
 cp -L "$sdl" "$fw/libSDL3.0.dylib"
 cp -L "$faudio" "$fw/libFAudio.0.dylib"
 # The SDK's libraries are universal; the app keeps their arm64 half (the game is arm64 only).
 for f in libvulkan.1.dylib libMoltenVK.dylib libdxcompiler.dylib; do
     if [[ $(lipo -archs "$SDK/lib/$f") == arm64 ]]; then cp -L "$SDK/lib/$f" "$fw/$f"; else lipo -thin arm64 "$SDK/lib/$f" -output "$fw/$f"; fi
 done
-chmod u+w "$app/Contents/MacOS/faf_game" "$fw"/*.dylib   # Homebrew installs its libraries read-only
+chmod u+w "$game/Contents/MacOS/faf_game" "$fw"/*.dylib   # Homebrew installs its libraries read-only
 
-# Load commands: SDL3 and FAudio through @rpath, which is the bundle's Frameworks folder.
-exe=$app/Contents/MacOS/faf_game
+# Load commands: SDL3 and FAudio through @rpath, which is the game app's Frameworks folder.
+exe=$game/Contents/MacOS/faf_game
 nametool -id @rpath/libSDL3.0.dylib "$fw/libSDL3.0.dylib"
 nametool -id @rpath/libFAudio.0.dylib \
     -change "$(otool -L "$fw/libFAudio.0.dylib" | awk '/libSDL3[.0-9]*\.dylib/ {print $1; exit}')" @rpath/libSDL3.0.dylib \
@@ -87,8 +102,8 @@ nametool -add_rpath @loader_path "$fw/libFAudio.0.dylib"
 
 # MoltenVK's manifest; a relative library_path is taken from the manifest's own folder.
 sed 's|"library_path": *"[^"]*"|"library_path": "../../../Frameworks/libMoltenVK.dylib"|' \
-    "$SDK/share/vulkan/icd.d/MoltenVK_icd.json" > "$app/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
-grep -q '"../../../Frameworks/libMoltenVK.dylib"' "$app/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json" ||
+    "$SDK/share/vulkan/icd.d/MoltenVK_icd.json" > "$game/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
+grep -q '"../../../Frameworks/libMoltenVK.dylib"' "$game/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json" ||
     fail "could not point MoltenVK_icd.json at the bundle"
 
 cp "$root/macos/app/faf-launch" "$app/Contents/Resources/faf-launch"
@@ -102,17 +117,19 @@ cp "$root/dependencies/ffmpeg/COPYING.LGPLv2.1" "$lic/FFmpeg-LGPLv2.1.txt"
 
 # Nothing may load from outside the bundle: every non-system load command and rpath must be
 # relative (@rpath, @executable_path, @loader_path).
-for f in "$exe" "$fw"/*.dylib; do
+for f in "$exe" "$fw"/*.dylib "$app/Contents/MacOS/FAF Native"; do
     outside=$(otool -L "$f" | awk '/^\t/ {print $1}' | grep -vE '^(@rpath|@executable_path|@loader_path)/|^/usr/lib/|^/System/Library/' || true)
-    outside+=$(otool -l "$f" | awk '/LC_RPATH/ {r = 1} r && $1 == "path" {print $2; r = 0}' | grep -v '^@' || true)
+    outside+=$(otool -l "$f" | awk '/LC_RPATH/ {r = 1} r && $1 == "path" {print $2; r = 0}' | grep -vE '^@|^/usr/lib/' || true)
     [[ -z $outside ]] || fail "${f:t} still loads from outside the bundle: $outside"
 done
 
-# Sign the libraries, then the bundle (which signs faf_game and seals Info.plist and Resources).
+# Sign inside out: the libraries, the game app, then the app (each bundle signature covers its
+# executable, Info.plist and Resources; the outer one also seals the signed game app).
 opts=(--force --sign "$SIGN_IDENTITY")
 [[ $SIGN_IDENTITY == - ]] || opts+=(--options runtime --timestamp)
 for f in "$fw"/*.dylib; do sign "${opts[@]}" "$f"; done
-sign "${opts[@]}" --identifier local.faf-re-mac.game "$app"
+sign "${opts[@]}" --identifier "$BUNDLE_ID.game" "$game"
+sign "${opts[@]}" --identifier "$BUNDLE_ID" "$app"
 codesign --verify --deep --strict "$app" || fail "the signature does not verify"
 
 print "$app"

@@ -19,7 +19,7 @@
 # client's /log file. The exit status is the game's.
 set -u
 contents=${0:A:h:h}
-game=$contents/MacOS/faf_game
+game=$contents/Helpers/FAF\ Native\ Game.app/Contents/MacOS/faf_game
 home=${FAF_NATIVE_HOME:-$HOME/Library/Application Support/FAF Native}
 logs=$HOME/Library/Logs/FAF\ Native
 mkdir -p "$logs"
