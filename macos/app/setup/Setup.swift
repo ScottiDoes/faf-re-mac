@@ -125,6 +125,7 @@ enum Hookup: Equatable {
 /// What the FAF client has: its data folder (~/.faforever) and settings (client.prefs).
 struct ClientInfo: Equatable {
     var hasData = false
+    var hasPrefs = false        // client.prefs exists: the client has run (and been logged in to) here
     var gameType: String?
     var gameVersion: String?
     var installationPath: String?
@@ -139,6 +140,7 @@ struct ClientInfo: Equatable {
             info.gameType = luaString(text, "GameType")
             info.gameVersion = luaString(text, "GameVersion")
         }
+        info.hasPrefs = fm.fileExists(atPath: Places.clientData.appendingPathComponent("client.prefs").path)
         if let data = try? Data(contentsOf: Places.clientData.appendingPathComponent("client.prefs")),
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let fa = root["forgedAlliance"] as? [String: Any] {
@@ -158,7 +160,8 @@ struct ClientInfo: Equatable {
     }
 
     var hookup: Hookup {
-        guard hasData || decorator != nil else { return .noClient }
+        // Settings without a decorator (a client that has run but never had one set) count as .none.
+        guard hasData || hasPrefs || decorator != nil else { return .noClient }
         let decorator = (self.decorator ?? "").trimmingCharacters(in: .whitespaces)
         if decorator.isEmpty || decorator == "%s" || decorator == "\"%s\"" { return .none }
         if decorator.contains(Places.launcher.path) { return .thisApp }
@@ -270,6 +273,8 @@ final class SetupModel: ObservableObject {
     @Published private(set) var installFraction: Double?
     @Published private(set) var installText = ""
     @Published private(set) var rosettaInstalling = false
+    /// What FAF Native is doing to the client right now (stopping it, resetting its window).
+    @Published private(set) var clientBusy: String?
     private var installTask: Task<Void, Never>?
     private var config = Config.load()
     private var cancelFlag = CancelFlag()
@@ -422,6 +427,56 @@ final class SetupModel: ObservableObject {
     }
 
     func cancelClientInstall() { installTask?.cancel() }
+
+    /// The window calls this every few seconds: is a client running, has it written its settings
+    /// (after the first login), and what do they say.
+    func pollClient() {
+        guard !isCopying, !isInstallingClient, clientBusy == nil else { return }
+        clientRunning = ClientRunner.isRunning()
+        clientPrefsExist = FileManager.default.fileExists(atPath: Places.clientPrefs.path)
+        let info = ClientInfo.read()
+        if info != client { client = info }
+    }
+
+    func stopClient() {
+        clientBusy = "Stopping the FAF client…"
+        Task.detached {
+            let stopped = ClientRunner.stop()
+            await MainActor.run {
+                self.clientBusy = nil
+                self.pollClient()
+                if !stopped { self.alert = "The FAF client didn't quit." }
+            }
+        }
+    }
+
+    /// Stops the client if it runs, forgets its window placement, and starts FAF Native's own
+    /// client again (another client is left for the player to start).
+    func resetClientWindow() {
+        clientBusy = clientRunning ? "Stopping the FAF client…" : "Resetting…"
+        Task.detached {
+            let stopped = ClientRunner.stop()
+            await MainActor.run {
+                self.clientBusy = nil
+                guard stopped else {
+                    self.alert = "The FAF client didn't quit, so its window wasn't reset."
+                    self.pollClient()
+                    return
+                }
+                do {
+                    _ = try ClientSettings.resetWindow()
+                    if self.installedClient != nil {
+                        self.startClient()
+                    } else {
+                        self.alert = "Done: the FAF client's window opens at its default size and place the next time you start it."
+                    }
+                } catch {
+                    self.alert = error.localizedDescription
+                }
+                self.pollClient()
+            }
+        }
+    }
 
     func startClient() {
         guard let installed = installedClient else { return }

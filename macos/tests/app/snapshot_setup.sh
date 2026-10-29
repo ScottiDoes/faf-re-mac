@@ -9,6 +9,8 @@
 #   applied-*  the same home after "Apply for Me" (writes its .faforever/client.prefs, with a backup)
 #   client-*   with CLIENT_INSTALL=1 only: a home kept in build/client-install-test where the window
 #              downloads and installs the FAF client (about 260 MB, once; later runs reuse it)
+#   running-*  with CLIENT_INSTALL=1 only: that home with a client that has logged in and runs
+#              (FAF_NATIVE_TEST_CLIENT_RUNNING=1)
 # Usage: [CLIENT_INSTALL=1] macos/tests/app/snapshot_setup.sh
 set -eu
 root=${0:A:h:h:h:h}
@@ -45,4 +47,7 @@ if [[ ${CLIENT_INSTALL:-0} == 1 ]]; then
     ch=$root/build/client-install-test/home
     mkdir -p "$ch"
     FAF_NATIVE_TEST_HOME=$ch SNAPSHOT_INSTALL_CLIENT=1 "$snap" "$out/client"
+    # The same with a running client that has logged in once: Reset Window, Stop, "Is Running".
+    mkdir -p "$ch/.faforever"; [[ -f $ch/.faforever/client.prefs ]] || print '{"mainWindow": {"x": 4000, "y": 3000}}' > "$ch/.faforever/client.prefs"
+    FAF_NATIVE_TEST_HOME=$ch FAF_NATIVE_TEST_CLIENT_RUNNING=1 "$snap" "$out/running"
 fi

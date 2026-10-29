@@ -275,18 +275,49 @@ enum ClientInstaller {
     }
 }
 
-/// Starting the installed client, and whether a client is running.
+/// Starting and stopping the client, and whether one is running (FAF Native's own or any other).
 enum ClientRunner {
-    static func isRunning() -> Bool {
-        // A test home (snapshot_setup.sh) is not the one a running client uses.
-        if ProcessInfo.processInfo.environment["FAF_NATIVE_TEST_HOME"] != nil { return false }
+    /// A test home (snapshot_setup.sh) is not the one a running client uses: no client is seen or stopped.
+    private static var testing: Bool { ProcessInfo.processInfo.environment["FAF_NATIVE_TEST_HOME"] != nil }
+
+    /// The client's main class, in every running client's command line.
+    static let mainClass = "com.faforever.client.Main"
+
+    /// The process IDs whose command line contains `pattern` (running FAF clients by default).
+    static func processIDs(matching pattern: String = mainClass) -> [Int32] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-f", "com.faforever.client.Main"]
-        process.standardOutput = FileHandle.nullDevice
-        do { try process.run() } catch { return false }
+        process.arguments = ["-f", pattern]
+        let output = Pipe()
+        process.standardOutput = output
+        do { try process.run() } catch { return [] }
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         process.waitUntilExit()
-        return process.terminationStatus == 0
+        return text.split(separator: "\n").compactMap { Int32($0) }
+    }
+
+    /// In a test home, FAF_NATIVE_TEST_CLIENT_RUNNING=1 stands for a running client (for pictures of that state).
+    static func isRunning() -> Bool {
+        testing ? ProcessInfo.processInfo.environment["FAF_NATIVE_TEST_CLIENT_RUNNING"] == "1" : !processIDs().isEmpty
+    }
+
+    /// Asks every running client to quit (SIGTERM: Java runs the client's shutdown as when it is
+    /// closed), then forces it (SIGKILL) after `timeout`. True when none is left. Blocks; call it
+    /// off the main thread.
+    static func stop(matching pattern: String = mainClass, timeout: TimeInterval = 10) -> Bool {
+        if testing && pattern == mainClass { return true }
+        var running = processIDs(matching: pattern)
+        running.forEach { _ = kill($0, SIGTERM) }
+        let deadline = Date().addingTimeInterval(timeout)
+        while !running.isEmpty && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            running = processIDs(matching: pattern)
+        }
+        if !running.isEmpty {
+            running.forEach { _ = kill($0, SIGKILL) }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        return processIDs(matching: pattern).isEmpty
     }
 
     /// The options that work for the client on a Mac (as ~/Gaming/faf/run-faf.command used them).
@@ -320,20 +351,38 @@ enum ClientRunner {
     }
 }
 
-/// The two client settings FAF Native needs, written into client.prefs on request.
+/// Client settings FAF Native changes in client.prefs on request: the two it needs, and the
+/// client's window placement.
 enum ClientSettings {
-    /// Sets the executable decorator (and the Forged Alliance location, when given), keeping every
-    /// other setting; the old file is kept beside it as client.prefs.before-faf-native-<time>.
+    /// Sets the executable decorator (and the Forged Alliance location, when given).
     static func apply(gamePath: String?) throws -> URL {
+        try rewrite { root in
+            var fa = root["forgedAlliance"] as? [String: Any] ?? [:]
+            fa["executableDecorator"] = Places.launcherLine
+            if let gamePath { fa["installationPath"] = gamePath }
+            root["forgedAlliance"] = fa
+        }
+    }
+
+    /// Forgets where the client's window was (mainWindow x, y, width, height, maximized), so it
+    /// opens at its default size and place on the main screen.
+    static func resetWindow() throws -> URL {
+        try rewrite { root in
+            var window = root["mainWindow"] as? [String: Any] ?? [:]
+            for key in ["x", "y", "width", "height", "maximized"] { window.removeValue(forKey: key) }
+            root["mainWindow"] = window
+        }
+    }
+
+    /// Changes client.prefs while no client runs, keeping every other setting; the old file stays
+    /// beside it as client.prefs.before-faf-native-<time>. Returns that backup.
+    private static func rewrite(_ change: (inout [String: Any]) -> Void) throws -> URL {
         guard !ClientRunner.isRunning() else { throw SetupError("Quit the FAF client first: it rewrites its settings when it quits.") }
         let data = try Data(contentsOf: Places.clientPrefs)
         guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw SetupError("The client's settings file isn't the JSON FAF Native expects; nothing was changed.")
         }
-        var fa = root["forgedAlliance"] as? [String: Any] ?? [:]
-        fa["executableDecorator"] = Places.launcherLine
-        if let gamePath { fa["installationPath"] = gamePath }
-        root["forgedAlliance"] = fa
+        change(&root)
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let backup = Places.clientPrefs.deletingLastPathComponent().appendingPathComponent("client.prefs.before-faf-native-\(stamp)")
         try FileManager.default.copyItem(at: Places.clientPrefs, to: backup)
