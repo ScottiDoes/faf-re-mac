@@ -62,6 +62,16 @@ struct GameFolder: Identifiable, Equatable {
     var isValid: Bool { missing.isEmpty }
     var isAppCopy: Bool { url.standardizedFileURL.path == Places.copiedGame.standardizedFileURL.path }
 
+    /// Desktop, Documents, Downloads or iCloud Drive: folders macOS guards with a privacy permission,
+    /// where iCloud's Desktop & Documents sync can also leave only placeholders of big files.
+    var guardedFolder: String? {
+        let path = url.standardizedFileURL.path
+        for name in ["Desktop", "Documents", "Downloads"] where path.hasPrefix(Places.home.appendingPathComponent(name).path + "/") {
+            return name
+        }
+        return path.contains("/Library/Mobile Documents/") ? "iCloud Drive" : nil
+    }
+
     static let required = [
         "bin/SupremeCommander.exe", "gamedata/units.scd", "gamedata/textures.scd", "gamedata/meshes.scd",
         "gamedata/env.scd", "gamedata/effects.scd", "sounds", "movies",

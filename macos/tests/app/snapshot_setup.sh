@@ -7,6 +7,7 @@
 #   copied-*   a home with a small stand-in Forged Alliance install and FAF client data, after the
 #              window's "Copy into FAF Native" (the copy itself runs, into that home)
 #   applied-*  the same home after "Apply for Me" (writes its .faforever/client.prefs, with a backup)
+#   desktop-*  that stand-in install on the Desktop (the warning about guarded folders)
 #   client-*   with CLIENT_INSTALL=1 only: a home kept in build/client-install-test where the window
 #              downloads and installs the FAF client (about 260 MB, once; later runs reuse it)
 #   running-*  with CLIENT_INSTALL=1 only: that home with a client that has logged in and runs
@@ -44,6 +45,16 @@ print "copied files: $(find "$h/Library/Application Support/FAF Native/Forged Al
 cat "$h/Library/Application Support/FAF Native/config.json"
 FAF_NATIVE_TEST_HOME=$h SNAPSHOT_APPLY=1 "$snap" "$out/applied"
 print "client.prefs now:"; cat "$h/.faforever/client.prefs"; print; ls "$h/.faforever"
+
+# The stand-in install on the Desktop (a folder macOS guards; iCloud may sync it).
+dh=$out/desktop-home
+dfa="$dh/Desktop/Supreme Commander Forged Alliance"
+mkdir -p "$dh/.faforever" "$dh/Desktop"
+ditto "$fa" "$dfa"
+cat > "$dh/.faforever/client.prefs" <<JSON
+{"forgedAlliance": {"installationPath": "$dfa", "executableDecorator": "\"%s\""}}
+JSON
+FAF_NATIVE_TEST_HOME=$dh "$snap" "$out/desktop"
 
 if [[ ${CLIENT_INSTALL:-0} == 1 ]]; then
     ch=$root/build/client-install-test/home

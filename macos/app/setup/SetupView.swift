@@ -122,6 +122,12 @@ struct SetupView: View {
             if let game = model.game {
                 if game.isValid {
                     StatusRow(kind: .good, title: game.isAppCopy ? "Using FAF Native's own copy" : "Found", detail: game.url.path)
+                    if let guarded = game.guardedFolder {
+                        StatusRow(kind: .warning, title: "This folder is in \(guarded)",
+                                  detail: "macOS asks permission before apps read Desktop, Documents and Downloads, and iCloud's Desktop & Documents "
+                                      + "sync may keep only placeholders of big files there, which can stall a game while it loads. "
+                                      + "Use Copy into FAF Native below, or move the folder (for example to a Games folder in your home folder) and choose it again.")
+                    }
                 } else {
                     StatusRow(kind: .problem, title: "This folder is incomplete",
                               detail: game.url.path + "\nMissing: " + game.missing.joined(separator: ", "))
