@@ -260,12 +260,28 @@ final class SetupModel: ObservableObject {
     @Published private(set) var copyFraction: Double?
     @Published private(set) var copyText = ""
     @Published var alert: String?
+    // The FAF client set up by FAF Native (ClientSetup.swift).
+    @Published private(set) var rosettaInstalled = true
+    @Published private(set) var installedClient: InstalledClient?
+    @Published private(set) var latestRelease: ClientRelease?
+    @Published private(set) var releaseProblem: String?
+    @Published private(set) var clientRunning = false
+    @Published private(set) var clientPrefsExist = false
+    @Published private(set) var installFraction: Double?
+    @Published private(set) var installText = ""
+    @Published private(set) var rosettaInstalling = false
+    private var installTask: Task<Void, Never>?
     private var config = Config.load()
     private var cancelFlag = CancelFlag()
 
     init() { refresh() }
 
     func refresh() {
+        rosettaInstalled = FileManager.default.fileExists(atPath: Places.rosetta.path)
+        installedClient = InstalledClient.load()
+        clientRunning = ClientRunner.isRunning()
+        clientPrefsExist = FileManager.default.fileExists(atPath: Places.clientPrefs.path)
+        checkLatestRelease()
         client = ClientInfo.read()
         let found = GameSearch.installations(client: client)
         if let saved = config.gamePath {
@@ -357,6 +373,99 @@ final class SetupModel: ObservableObject {
     var lastLaunch: String? {
         guard let text = try? String(contentsOf: Places.logs.appendingPathComponent("launch.log"), encoding: .utf8) else { return nil }
         return text.split(separator: "\n").last.map(String.init)
+    }
+
+    // MARK: The FAF client
+
+    private func checkLatestRelease() {
+        releaseProblem = nil
+        Task {
+            do {
+                let release = try await ClientRelease.fetch()
+                self.latestRelease = release
+            } catch {
+                self.releaseProblem = "Couldn't check for the latest FAF client: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    var isInstallingClient: Bool { installFraction != nil }
+
+    var clientUpdateAvailable: Bool {
+        guard let installed = installedClient, let latest = latestRelease else { return false }
+        return installed.clientVersion != latest.version
+    }
+
+    func installClient() {
+        guard let release = latestRelease, !isInstallingClient else { return }
+        installFraction = 0
+        installText = "Starting…"
+        installTask = Task {
+            do {
+                try await ClientInstaller.install(release) { text, fraction in
+                    Task { @MainActor in
+                        if self.installFraction != nil {
+                            self.installText = text
+                            self.installFraction = min(max(fraction, 0), 1)
+                        }
+                    }
+                }
+                self.installFraction = nil
+            } catch {
+                self.installFraction = nil
+                if !Task.isCancelled && !(error is CancellationError) {
+                    self.alert = "The FAF client wasn't installed: \(error.localizedDescription)"
+                }
+            }
+            self.refresh()
+        }
+    }
+
+    func cancelClientInstall() { installTask?.cancel() }
+
+    func startClient() {
+        guard let installed = installedClient else { return }
+        do {
+            try ClientRunner.start(installed)
+            clientRunning = true
+        } catch {
+            alert = "The FAF client didn't start: \(error.localizedDescription)"
+        }
+    }
+
+    /// Rosetta, through macOS's own administrator prompt.
+    func installRosetta() {
+        rosettaInstalling = true
+        Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", "do shell script \"/usr/sbin/softwareupdate --install-rosetta --agree-to-license\" with administrator privileges"]
+            let failed: Bool
+            do {
+                try process.run()
+                process.waitUntilExit()
+                failed = process.terminationStatus != 0
+            } catch {
+                failed = true
+            }
+            await MainActor.run {
+                self.rosettaInstalling = false
+                self.refresh()
+                if failed && !self.rosettaInstalled { self.alert = "Rosetta wasn't installed." }
+            }
+        }
+    }
+
+    /// Writes the executable decorator (and the Forged Alliance location chosen here) into the
+    /// client's settings, after a backup.
+    func applyClientSettings() {
+        do {
+            let backup = try ClientSettings.apply(gamePath: game?.isValid == true ? game?.url.path : nil)
+            refresh()
+            alert = "Done. The client's previous settings are saved as \(backup.lastPathComponent) in ~/.faforever."
+        } catch {
+            alert = error.localizedDescription
+        }
     }
 
     func copyToClipboard(_ text: String) {

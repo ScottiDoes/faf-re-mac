@@ -61,6 +61,7 @@ struct CopyField: View {
 
 struct SetupView: View {
     @EnvironmentObject private var model: SetupModel
+    @State private var confirmApply = false
 
     var body: some View {
         Form {
@@ -69,6 +70,13 @@ struct SetupView: View {
             appSection
         }
         .formStyle(.grouped)
+        .confirmationDialog("Change the FAF client's settings?", isPresented: $confirmApply) {
+            Button("Apply") { model.applyClientSettings() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("FAF Native sets the client's executable decorator to its launcher and its Forged Alliance location to the folder chosen above. "
+                + "Everything else stays as it is, and the current settings file is kept as a backup.")
+        }
         .alert("FAF Native", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
             Button("OK") { model.alert = nil }
         } message: {
@@ -141,18 +149,109 @@ struct SetupView: View {
 
     private var clientSection: some View {
         Section {
+            rosettaRows
+            installRows
             if model.client.hasData {
                 let version = [model.client.gameType, model.client.gameVersion].compactMap { $0 }.joined(separator: " ")
                 StatusRow(kind: .good, title: "FAF's game files are in place",
                           detail: version.isEmpty ? Places.clientData.path : "\(Places.clientData.path) (\(version))")
             } else {
                 StatusRow(kind: .problem, title: "No FAF game files yet",
-                          detail: "Install the FAF client, log in, and start any game once: the client downloads FAF's files into ~/.faforever.")
+                          detail: (model.installedClient == nil ? "Install the FAF client" : "Start the FAF client")
+                              + ", log in, and start any game once: the client downloads FAF's files into ~/.faforever.")
             }
             hookupRows
             locationRows
+            applyRow
         } header: {
             Text("FAF client")
+        } footer: {
+            Text("FAF's own client for Mac users: its Unix build on a Java runtime for Intel Macs (under Rosetta) with the macOS JavaFX libraries. "
+                + "It keeps its settings and downloads in ~/.faforever as usual.")
+        }
+    }
+
+    @ViewBuilder private var rosettaRows: some View {
+        if !model.rosettaInstalled {
+            StatusRow(kind: .warning, title: "Rosetta isn't installed",
+                      detail: "The FAF client's Java runtime is made for Intel Macs; Rosetta runs it on Apple silicon.")
+            HStack {
+                Spacer()
+                Button(model.rosettaInstalling ? "Installing…" : "Install Rosetta…") { model.installRosetta() }
+                    .disabled(model.rosettaInstalling)
+            }
+        }
+    }
+
+    @ViewBuilder private var installRows: some View {
+        if let fraction = model.installFraction {
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(value: fraction)
+                HStack {
+                    Text(model.installText).font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Cancel") { model.cancelClientInstall() }
+                }
+            }
+        } else if let installed = model.installedClient {
+            StatusRow(kind: .good, title: "FAF client \(installed.clientVersion) is set up",
+                      detail: "Java \(installed.javaVersion) and JavaFX \(installed.javafxVersion) for macOS, in \(Places.clientInstall.path)")
+            HStack {
+                if model.clientUpdateAvailable, let latest = model.latestRelease {
+                    Button("Update to \(latest.version)") { model.installClient() }
+                        .disabled(model.clientRunning)
+                }
+                Spacer()
+                Button(model.clientRunning ? "FAF Client Is Running" : "Start FAF Client") { model.startClient() }
+                    .disabled(model.clientRunning || !model.rosettaInstalled)
+            }
+        } else {
+            if model.client.hasData || model.clientPrefsExist {
+                StatusRow(kind: .info, title: "Your FAF client was set up outside FAF Native",
+                          detail: "FAF Native can also keep a copy of its own and update it. " + releaseSummary)
+            } else {
+                StatusRow(kind: .info, title: "FAF Native can set up the FAF client for you", detail: releaseSummary)
+            }
+            HStack {
+                Spacer()
+                Button("Download and Install") { model.installClient() }
+                    .disabled(model.latestRelease == nil)
+            }
+        }
+    }
+
+    private var releaseSummary: String {
+        guard let release = model.latestRelease else { return model.releaseProblem ?? "Checking for the latest version…" }
+        let megabytes = Int((Double(release.client.size + release.java.size) + 47e6) / 1e6)
+        return "Version \(release.version), with Java \(release.javaVersion) and the macOS JavaFX libraries: about \(megabytes) MB "
+            + "from GitHub, Adoptium and Maven Central, each checked against the checksum its source publishes."
+    }
+
+    /// The client's settings need changing: its launcher, or its Forged Alliance location.
+    private var settingsNeeded: Bool {
+        switch model.client.hookup {
+        case .none, .otherLauncher: return true
+        case .noClient, .thisApp, .handsOver: break
+        }
+        guard let game = model.game, game.isValid, let clientPath = model.client.installationPath else { return false }
+        return URL(fileURLWithPath: clientPath).standardizedFileURL.path != game.url.standardizedFileURL.path
+    }
+
+    @ViewBuilder private var applyRow: some View {
+        if settingsNeeded {
+            if model.clientPrefsExist {
+                HStack {
+                    Text(model.clientRunning ? "Quit the FAF client, and FAF Native can set these for you."
+                                             : "Or let FAF Native set these in the client's settings (a backup is kept).")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Apply for Me…") { confirmApply = true }
+                        .disabled(model.clientRunning)
+                }
+            } else {
+                Text("Start the FAF client once and log in; FAF Native can then set these for you.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -163,7 +262,9 @@ struct SetupView: View {
         case .handsOver(let launcher):
             StatusRow(kind: .good, title: "The client starts games through a launcher that hands over to FAF Native", detail: launcher)
         case .noClient:
-            StatusRow(kind: .info, title: "Once the client is installed, set its executable decorator to this line:")
+            StatusRow(kind: .info, title: model.installedClient == nil
+                          ? "Once the client is installed, set its executable decorator to this line:"
+                          : "After the client's first start, set its executable decorator to this line (or let FAF Native do it then):")
             CopyField(text: Places.launcherLine)
         case .none, .otherLauncher:
             if case .otherLauncher(let other) = model.client.hookup {

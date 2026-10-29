@@ -6,15 +6,19 @@
 #   fresh-*    a new player: an empty home folder (no FAF client, no Forged Alliance)
 #   copied-*   a home with a small stand-in Forged Alliance install and FAF client data, after the
 #              window's "Copy into FAF Native" (the copy itself runs, into that home)
-# Usage: macos/tests/app/snapshot_setup.sh
+#   applied-*  the same home after "Apply for Me" (writes its .faforever/client.prefs, with a backup)
+#   client-*   with CLIENT_INSTALL=1 only: a home kept in build/client-install-test where the window
+#              downloads and installs the FAF client (about 260 MB, once; later runs reuse it)
+# Usage: [CLIENT_INSTALL=1] macos/tests/app/snapshot_setup.sh
 set -eu
 root=${0:A:h:h:h:h}
 out=$root/build/setup-snapshot
 rm -rf "$out"; mkdir -p "$out"
 ditto "$root/build/app/FAF Native.app" "$out/FAF Native.app"
+sources=("$root"/macos/app/setup/*.swift)
+sources=(${sources:#*/FAFNativeApp.swift})   # the app's entry point; snapshot_setup.swift has its own
 xcrun --sdk macosx swiftc -parse-as-library -target arm64-apple-macos14.0 \
-    -o "$out/FAF Native.app/Contents/MacOS/snapshot" \
-    "$root/macos/app/setup/Setup.swift" "$root/macos/app/setup/SetupView.swift" "${0:A:h}/snapshot_setup.swift"
+    -o "$out/FAF Native.app/Contents/MacOS/snapshot" "${sources[@]}" "${0:A:h}/snapshot_setup.swift"
 snap=$out/FAF\ Native.app/Contents/MacOS/snapshot
 "$snap" "$out/mac"
 
@@ -34,3 +38,11 @@ JSON
 FAF_NATIVE_TEST_HOME=$h SNAPSHOT_COPY=1 "$snap" "$out/copied"
 print "copied files: $(find "$h/Library/Application Support/FAF Native/Forged Alliance" -type f | wc -l | tr -d ' ') (stand-in: $(find "$fa" -type f | wc -l | tr -d ' '))"
 cat "$h/Library/Application Support/FAF Native/config.json"
+FAF_NATIVE_TEST_HOME=$h SNAPSHOT_APPLY=1 "$snap" "$out/applied"
+print "client.prefs now:"; cat "$h/.faforever/client.prefs"; print; ls "$h/.faforever"
+
+if [[ ${CLIENT_INSTALL:-0} == 1 ]]; then
+    ch=$root/build/client-install-test/home
+    mkdir -p "$ch"
+    FAF_NATIVE_TEST_HOME=$ch SNAPSHOT_INSTALL_CLIENT=1 "$snap" "$out/client"
+fi
