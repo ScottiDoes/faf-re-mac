@@ -9,6 +9,7 @@
 #   Contents/Frameworks/libMoltenVK.dylib              Vulkan SDK: driver   } before the SDK's
 #   Contents/Frameworks/libdxcompiler.dylib            Vulkan SDK: DXC      } (VulkanLoader.cpp,
 #   Contents/Resources/vulkan/icd.d/MoltenVK_icd.json  MoltenVK's manifest  }  DxcBridge.cpp)
+#   Contents/Resources/faf-launch                      the FAF client's launcher (macos/app/faf-launch)
 #   Contents/Resources/licenses/                       the bundled libraries' licences
 # The game and FAudio reach SDL3 and FAudio through @rpath = Contents/Frameworks (Homebrew's
 # rpath is replaced); the check at the end fails the build if any load command still points
@@ -89,6 +90,9 @@ sed 's|"library_path": *"[^"]*"|"library_path": "../../../Frameworks/libMoltenVK
     "$SDK/share/vulkan/icd.d/MoltenVK_icd.json" > "$app/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
 grep -q '"../../../Frameworks/libMoltenVK.dylib"' "$app/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json" ||
     fail "could not point MoltenVK_icd.json at the bundle"
+
+cp "$root/macos/app/faf-launch" "$app/Contents/Resources/faf-launch"
+chmod 755 "$app/Contents/Resources/faf-launch"
 
 lic=$app/Contents/Resources/licenses
 cp "${sdl:h:h}/LICENSE.txt" "$lic/SDL3.txt"

@@ -1,0 +1,63 @@
+#!/bin/zsh
+# FAF Native's launcher for the FAF client (Contents/Resources/faf-launch in the app). Set it as
+# the client's executable decorator (client.prefs forgedAlliance.executableDecorator):
+#   "/Applications/FAF Native.app/Contents/Resources/faf-launch" "%s"
+# The client then calls  faf-launch <ForgedAlliance.exe> <game args...>  and the native game runs
+# in place of the Windows one. It runs from a run folder whose files link to the client's own:
+# the init files of the folder the client chose (bin for games, replaydata/bin for replays) and,
+# next to it, fa_path.lua and gamedata, as FAF's init.lua expects (../fa_path.lua, ../gamedata).
+# So featured-mod updates and replay versions come through, and nothing is written into the
+# client's folders. The client's arguments go through unchanged (/init, /log, /gpgnet,
+# /savereplay, /replay ...); the preferences file is mac.prefs when it exists (and no /prefs
+# was given).
+#
+# Environment:
+#   FAF_NATIVE_HOME  folder for the run folders game/ and replay/ (default
+#                    ~/Library/Application Support/FAF Native)
+# Logs, in ~/Library/Logs/FAF Native (beside the game's faf_diag.log): launch.log, one line per
+# launch and exit, and game-output.log, the game's stdout and stderr. The game's own log is the
+# client's /log file. The exit status is the game's.
+set -u
+contents=${0:A:h:h}
+game=$contents/MacOS/faf_game
+home=${FAF_NATIVE_HOME:-$HOME/Library/Application Support/FAF Native}
+logs=$HOME/Library/Logs/FAF\ Native
+mkdir -p "$logs"
+log=$logs/launch.log
+say() { print -r -- "$(date '+%F %T') $*" >> "$log" }
+if (( $# < 1 )) || [[ ${1:t} != *.exe ]]; then
+    print -u2 "usage: faf-launch <path to the client's ForgedAlliance.exe> [game arguments ...]"
+    exit 2
+fi
+version=$(/usr/libexec/PlistBuddy -c "Print :FAFNativeVersion" "$contents/Info.plist" 2>/dev/null)
+
+bindir=${1:A:h} datadir=${1:A:h:h}
+# The game carries FAF's engine patches up to game version 3840 (faf-re docs/SWITCHES.md). A newer
+# "faf" version may need new ones: noted in the log, the game runs anyway. (Coop and the other
+# featured mods number their versions differently.)
+gtype=$(sed -n 's/^GameType = "\([^"]*\)".*/\1/p' "$datadir/fa_path.lua" 2>/dev/null)
+gver=$(sed -n 's/^GameVersion = "\([0-9]*\)".*/\1/p' "$datadir/fa_path.lua" 2>/dev/null)
+[[ $gtype == faf && -n $gver ]] && (( gver > 3840 )) &&
+    say "note: game version $gver is newer than the engine patches this build carries (3840)"
+
+[[ ${datadir:t} == replaydata ]] && run=$home/replay || run=$home/game
+mkdir -p "$run/bin" || { say "cannot create the run folder $run"; exit 1; }
+find "$run/bin" -maxdepth 1 -type l -delete
+for f in "$bindir"/*.lua(N); do ln -s "$f" "$run/bin/${f:t}"; done
+ln -sfn "$datadir/fa_path.lua" "$run/fa_path.lua"
+ln -sfn "$datadir/gamedata" "$run/gamedata"
+
+args=("${@:2}")
+prefs="$HOME/Library/Application Support/Gas Powered Games/Supreme Commander Forged Alliance/mac.prefs"
+[[ -f $prefs && ${args[(Ie)/prefs]} == 0 ]] && args+=(/prefs mac.prefs)
+say "launch (${version:-unknown version}): $game ${args[*]}"
+cd "$run/bin" || exit 1
+"$game" "${args[@]}" >> "$logs/game-output.log" 2>&1 &
+pid=$!
+# The game doesn't quit on SIGTERM (SDL turns it into a quit event the lobby ignores), so a stop
+# from the client is followed by SIGKILL after 5 s.
+trap 'kill -TERM $pid 2>/dev/null; (sleep 5; kill -KILL $pid 2>/dev/null) &' TERM INT HUP
+wait $pid; rc=$?
+while kill -0 $pid 2>/dev/null; do wait $pid; rc=$?; done  # a trapped signal interrupts wait early
+say "game exited with status $rc"
+exit $rc
