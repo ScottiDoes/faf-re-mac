@@ -1,0 +1,8 @@
+# Everything macos/build_app.sh downloads, unpacks and builds here stays out of git; only the pins
+# and the drop-in folder's instructions are tracked.
+*
+!.gitignore
+!versions.sh
+!drop-in/
+drop-in/*
+!drop-in/README.md

@@ -59,6 +59,17 @@ Configuring brings `dependencies/` up to date: the submodules (Wild Magic 3.8, z
 
 FFmpeg 7.1.3 (the SFD movie player's decoder) is compiled from source with the engine: `dependencies/ffmpeg` is the unmodified FFmpeg release plus a CMake build ([Draiget/ffmpeg-mirror](https://github.com/Draiget/ffmpeg-mirror)), and its libraries are linked statically, so there are no FFmpeg DLLs and no prebuilt binaries. Its configuration and licence (LGPL v2.1+): [SFD compatibility](docs/FAF_SFD_COMPATIBILITY.md#ffmpeg-dependency-and-build).
 
+### macOS (Apple silicon)
+
+The `macos-native` branch also builds a native Mac app, FAF Native: the engine, a setup window that fetches and connects the FAF client, and the client's launcher. One script fetches what it needs (pinned and checksummed) and packages the app into `build/dist`:
+
+```sh
+git clone -b macos-native https://github.com/ScottiDoes/faf-re-mac.git faf-re
+faf-re/macos/build_app.sh
+```
+
+Requirements, options and sharing the app: [macos/BUILDING.md](macos/BUILDING.md).
+
 ### Profiling with Tracy
 
 A profile build adds [Tracy](https://github.com/wolfpld/tracy) 0.14.1 instrumentation: zones for the sim beat and its phases, the sim and UI Lua garbage collection, the worker pool tasks, rendering, `Present`, the UI and UDP send/receive, a frame mark per rendered frame and per sim beat, thread names, and every engine allocation and free.
