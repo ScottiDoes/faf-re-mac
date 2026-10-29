@@ -14,6 +14,7 @@
 #     Contents/Frameworks/libMoltenVK.dylib              Vulkan SDK: driver   } before the SDK's
 #     Contents/Frameworks/libdxcompiler.dylib            Vulkan SDK: DXC      } (VulkanLoader.cpp,
 #     Contents/Resources/vulkan/icd.d/MoltenVK_icd.json  MoltenVK's manifest  }  DxcBridge.cpp)
+#     Contents/Resources/fafengine-macos                 the engine's own Lua hooks (StartupHelpers.cpp)
 # The game and FAudio reach SDL3 and FAudio through @rpath = the game app's Frameworks (Homebrew's
 # rpath is replaced); the check at the end fails the build if any load command still points
 # outside the bundle. FFmpeg is linked in statically (LGPL v2.1+, macos/ffmpeg.cmake). The game
@@ -127,6 +128,9 @@ sed 's|"library_path": *"[^"]*"|"library_path": "../../../Frameworks/libMoltenVK
     "$SDK/share/vulkan/icd.d/MoltenVK_icd.json" > "$game/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
 grep -q '"../../../Frameworks/libMoltenVK.dylib"' "$game/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json" ||
     fail "could not point MoltenVK_icd.json at the bundle"
+
+# The engine's own Lua hooks: the game looks for them in its bundle (never in this source tree).
+ditto "$root/macos/fafengine-macos" "$game/Contents/Resources/fafengine-macos"
 
 cp "$root/macos/app/faf-launch" "$app/Contents/Resources/faf-launch"
 chmod 755 "$app/Contents/Resources/faf-launch"

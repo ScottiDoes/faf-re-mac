@@ -24,6 +24,11 @@
 #include <string>
 #include <system_error>
 #include <direct.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+
+#include <climits>
+#endif
 
 #include <Windows.h>
 #include <mmsystem.h>
@@ -818,19 +823,43 @@ namespace
   }
 
 #if defined(FAF_POSIX)
+  /** The running executable's folder (symlinks resolved), or empty. */
+  [[nodiscard]] std::filesystem::path ExecutableFolder()
+  {
+#if defined(__APPLE__)
+    char path[PATH_MAX]{};
+    std::uint32_t size = sizeof(path);
+    char resolved[PATH_MAX]{};
+    if (::_NSGetExecutablePath(path, &size) == 0 && ::realpath(path, resolved) != nullptr) {
+      return std::filesystem::path(resolved).parent_path();
+    }
+#endif
+    return {};
+  }
+
   /**
    * macOS addition: the native build's own engine Lua, mounted at /fafengine-macos and
    * registered as a hook directory like `fafengine` above. Its hook scales FAF's UI to the
    * display panel (platform/posix/shell/Shell.h, UiScaleCorrection). Looked for next to
-   * `fafengine` (the run folder), else in the source tree the engine was built from
-   * (FAF_MACOS_LUA_DIR, macos/fafengine-macos).
+   * `fafengine` (the run folder), then in the app bundle the game runs from
+   * (Contents/Resources/fafengine-macos, macos/app/make_app.sh), and only for a development
+   * build outside an app bundle in the source tree it was built from (FAF_MACOS_LUA_DIR,
+   * macos/fafengine-macos). A packaged app must not reach for the build machine's tree: on
+   * another Mac that path can exist over a network share, and every script load then probes
+   * it (a game stalled loading its blueprints that way).
    */
   void AppendMacosHookFolder(msvc8::vector<moho::SVFSMountPoint>& mountPoints)
   {
     std::error_code error;
     std::filesystem::path folder("fafengine-macos");
+    const std::filesystem::path executableFolder = ExecutableFolder();
+    const bool inAppBundle =
+      executableFolder.filename() == "MacOS" && executableFolder.parent_path().filename() == "Contents";
+    if (inAppBundle && !std::filesystem::is_directory(folder, error)) {
+      folder = executableFolder.parent_path() / "Resources" / "fafengine-macos";
+    }
 #if defined(FAF_MACOS_LUA_DIR)
-    if (!std::filesystem::is_directory(folder, error)) {
+    if (!inAppBundle && !std::filesystem::is_directory(folder, error)) {
       folder = std::filesystem::path(FAF_MACOS_LUA_DIR);
     }
 #endif

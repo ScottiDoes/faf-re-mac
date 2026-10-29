@@ -118,8 +118,9 @@ namespace gpg::gal::vulkan
           sDriverSelection = "the loader's own search (no " + lower + " manifest at " + manifest + ")";
         }
       }
-      // The SDK's explicit layers (validation for /vulkandebug, the screenshot layer).
-      if (!IsSet("VK_LAYER_PATH") && !IsSet("VK_ADD_LAYER_PATH")) {
+      // The SDK's explicit layers (validation for /vulkandebug, the screenshot layer), for a
+      // development build: an app bundle carries none and leaves the build machine's SDK alone.
+      if (bundle.empty() && !IsSet("VK_LAYER_PATH") && !IsSet("VK_ADD_LAYER_PATH")) {
         const std::string layers = sdk + "/share/vulkan/explicit_layer.d";
         if (!sdk.empty() && Exists(layers)) {
           ::setenv("VK_ADD_LAYER_PATH", layers.c_str(), 1);
