@@ -2,8 +2,8 @@
 # Builds FAF Native.app (the native Apple silicon Forged Alliance engine, its setup window and the
 # FAF client's launcher) from a clone of this repository, in one command:
 #   git clone <this repository> faf-re && faf-re/macos/build_app.sh
-# The app lands in build/dist: FAF Native.app and FAF-Native-<commit>.zip. macos/BUILDING.md says
-# more (what the app needs on a player's Mac, newer versions, signing).
+# The app lands in build/dist: FAF Native.app, and FAF-Native-<commit>.dmg and .zip to pass on.
+# macos/BUILDING.md says more (what the app needs on a player's Mac, newer versions, signing).
 #
 # This Mac needs Apple silicon, macOS 14 or later, and Xcode or Apple's Command Line Tools
 # (xcode-select --install). Everything else is fetched once, checked against the SHA-256 pinned
@@ -21,7 +21,7 @@
 #   ACCEPT_VULKAN_SDK_LICENSE=1  accept the Vulkan SDK's licences without being asked
 #   FAF_VULKAN_SDK=<dir>         use a Vulkan SDK installed elsewhere (its macOS folder)
 #   SIGN_IDENTITY, BUNDLE_ID     passed to make_app.sh (default: ad hoc, local.faf-re-mac)
-#   OUT                          folder for the app and the zip (default build/dist)
+#   OUT                          folder for the app, the disk image and the zip (default build/dist)
 #   JOBS                         parallel compile jobs (default: all cores)
 #   FAF_BUILD_OWN_TOOLS=1        fetch CMake and Ninja even if this Mac has them (to test that path)
 set -eu
@@ -243,9 +243,11 @@ rm -f "$zip"
 ditto -c -k --keepParent "$app" "$zip"
 note "$app"
 note "$zip ($(du -h "$zip" | cut -f1 | tr -d ' '))"
+dmg=$("$root/macos/app/dmg/make_dmg.sh" "$app" "${zip%.zip}.dmg") || fail "the disk image was not made"
+note "$dmg ($(du -h "$dmg" | cut -f1 | tr -d ' '))"
 note "version: ${made#*$'\n'}"
 print
-print "Done. Copy FAF Native.app into Applications and open it: its window walks through the rest"
-print "(the Forged Alliance files and the FAF client). A copy sent to another Mac is opened the"
-print "first time from System Settings > Privacy & Security > Open Anyway, unless the app was signed"
-print "with a Developer ID and notarized (macos/BUILDING.md)."
+print "Done. Copy FAF Native.app into Applications (or open the disk image and drag it there) and"
+print "open it: its window walks through the rest (the Forged Alliance files and the FAF client)."
+print "A copy sent to another Mac is opened the first time from System Settings > Privacy & Security >"
+print "Open Anyway, unless the app was signed with a Developer ID and notarized (macos/BUILDING.md)."

@@ -15,7 +15,7 @@ git clone -b macos-native https://github.com/ScottiDoes/faf-re-mac.git faf-re
 faf-re/macos/build_app.sh
 ```
 
-The app lands in `build/dist`: `FAF Native.app`, and the same as `FAF-Native-<commit>.zip` to pass on. The first run downloads about 520 MB and compiles for a while. After that, running it again only redoes what changed.
+The app lands in `build/dist`: `FAF Native.app`, and the same as `FAF-Native-<commit>.dmg` and `FAF-Native-<commit>.zip` to pass on. Opening the disk image shows the app beside a shortcut to Applications, with a background that says to drag one onto the other. The first run downloads about 520 MB and compiles for a while. After that, running it again only redoes what changed.
 
 ### What the script does
 
@@ -49,7 +49,7 @@ Options (environment variables):
 |---|---|
 | `ACCEPT_VULKAN_SDK_LICENSE=1` | accept the Vulkan SDK's licences without being asked (unattended builds) |
 | `FAF_VULKAN_SDK=<dir>` | use a Vulkan SDK installed elsewhere (its `macOS` folder) |
-| `OUT=<dir>` | where the app and zip go |
+| `OUT=<dir>` | where the app, the disk image and the zip go |
 | `SIGN_IDENTITY=<identity>` | sign with this identity instead of ad hoc (see below) |
 | `BUNDLE_ID=<id>` | the app's bundle identifier; the game's is `<id>.game` (default `local.faf-re-mac`) |
 | `JOBS=<n>` | parallel compile jobs |
@@ -89,14 +89,16 @@ For an app that opens anywhere without this, sign it with a Developer ID Applica
 
 ```sh
 SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" macos/build_app.sh
-xcrun notarytool submit "build/dist/FAF-Native-<commit>.zip" --keychain-profile <profile> --wait
-xcrun stapler staple "build/dist/FAF Native.app"
+xcrun notarytool submit "build/dist/FAF-Native-<commit>.dmg" --keychain-profile <profile> --wait
+xcrun stapler staple "build/dist/FAF-Native-<commit>.dmg"
 ```
 
-These notarization steps are not automated or tested yet. `make_app.sh` already signs with the hardened runtime and a secure timestamp when given an identity.
+These notarization steps are not automated or tested yet. `make_app.sh` already signs with the hardened runtime and a secure timestamp when given an identity, and `make_dmg.sh` signs the disk image with it.
 
 ## For development
 
 - `macos/app/deploy.sh` builds the development tree (`build/macos`, Homebrew's SDL3 and FAudio), checks it against a recorded replay, and installs the app on this Mac, keeping the previous one for `deploy.sh rollback`.
 - `macos/tests/app/snapshot_setup.sh` draws the setup window offscreen into PNGs for a few situations.
+- `macos/app/icon`: `FAFNative-art.png` is the icon's artwork, made with an image generator; `render_icon.swift` puts it in the macOS icon shape for `make_icon.sh`.
+- `macos/app/dmg/make_dmg.sh` makes the disk image from an app: `background.swift` draws its window's background over `background-art.jpg` (also generated), and `layout.swift` writes the `.DS_Store` that sets the window's size, background and icon positions, without scripting Finder.
 - `macos/run_game.sh` and `macos/run_replay.sh` run the game and the headless replay checker.
