@@ -50,6 +50,7 @@ mounted=$(hdiutil attach -nobrowse -noautoopen -noverify -mountrandom "$work" "$
 xattr -wx com.apple.FinderInfo 0000000000000000040000000000000000000000000000000000000000000000 "$mounted"  # custom icon
 swift "$here/layout.swift" "$mounted" ${width}x$height $icon_size \
     "${app:t}=$app_x,$icons_y" "Applications=$applications_x,$icons_y" || fail "the window layout was not written"
+codesign --verify --deep --strict "$mounted/${app:t}" || fail "the app's signature does not verify in the image"
 rm -rf "$mounted/.fseventsd"
 hdiutil detach -quiet "$mounted" || fail "the image did not unmount"
 mounted=

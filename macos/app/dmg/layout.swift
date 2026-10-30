@@ -1,8 +1,10 @@
 // Writes the .DS_Store that makes Finder open the FAF Native disk image as designed: a window of a
 // set size with no toolbar or sidebar, the background picture (.background/background.tiff), large
-// icons, each item where the picture expects it, and the app's name without ".app". Finder reads
-// the file when it opens the volume. Nothing asks Finder to arrange the window (no AppleScript, so
-// no Automation permission and no logged-in session needed).
+// icons and each item where the picture expects it. Finder reads the file when it opens the
+// volume. Nothing asks Finder to arrange the window (no AppleScript, so no Automation permission
+// and no logged-in session needed). It leaves the app itself alone: even the flag that hides
+// ".app" is Finder information on the bundle, which a strict signature check rejects, and Finder
+// hides the extension of an app anyway.
 //
 // The file is a "buddy allocator" holding one B-tree of records, each a file name, a four-letter
 // code and a typed value; Finder's own files show the layout, and dmgbuild's ds_store and mac_alias
@@ -167,12 +169,6 @@ for item in items {
     location.u32(0xFFFF_FFFF)
     location.u32(0xFFFF_0000)
     records.append(Record(name: item.name, code: "Iloc", value: blob(location)))
-    var url = volume.appendingPathComponent(item.name)
-    if url.pathExtension == "app" {
-        var values = URLResourceValues()
-        values.hasHiddenExtension = true
-        do { try url.setResourceValues(values) } catch { fail("cannot hide the extension of \(item.name): \(error)") }
-    }
 }
 // Finder keeps records sorted by name, ignoring case, then by code.
 records.sort { ($0.name.lowercased(), $0.code) < ($1.name.lowercased(), $1.code) }
