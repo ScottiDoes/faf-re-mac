@@ -6521,7 +6521,13 @@ void moho::SetupPrimaryAdapterSettings()
     }
 
     LuaPlus::LuaObject defaultValue(state);
+#if defined(FAF_POSIX)
+    // macOS: a new player starts in a window (CScApp's head setup), so that is the default
+    // the Options screen and a new profile get.
+    defaultValue.AssignString(state, kWindowedModeKey);
+#else
     defaultValue.AssignString(state, "1024,768,60");
+#endif
     OPTIONS_SetCustomData(kPrimaryAdapterKey, optionRoot, defaultValue);
     return;
   }

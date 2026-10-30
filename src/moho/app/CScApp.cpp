@@ -51,9 +51,13 @@
 #include "moho/ui/IUIManager.h"
 #include "moho/ui/UiWorldShapes.h"
 #if defined(FAF_POSIX)
+#include <cctype>
 #include <cstdio>
+#include <fstream>
+#include <string>
 
 #include "moho/lua/CScrLuaObjectFactory.h"
+#include "moho/misc/FileWaitHandleSet.h"
 #include "platform/posix/shell/Shell.h"
 #endif
 
@@ -119,6 +123,166 @@ namespace
     } catch (const std::exception& exception) {
       gpg::Warnf("display: could not scale the UI: %s", exception.what());
     }
+  }
+
+  // macOS: whether the current profile holds this option, i.e. the player (or an earlier
+  // start) chose it. A new install has no profile yet; FAF's lobby makes one later.
+  [[nodiscard]] bool HasProfileOption(const char* const key)
+  {
+    moho::IUserPrefs* const preferences = moho::USER_GetPreferences();
+    return preferences != nullptr && !preferences->LookupCurrentOption(msvc8::string(key)).IsNil();
+  }
+
+  [[nodiscard]] std::string UpperCase(std::string text)
+  {
+    for (char& c : text) {
+      c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return text;
+  }
+
+  // The game's folder (/loc/<name>/strings_db.lua) for a BCP 47 language tag: zh-Hans CN,
+  // zh-Hant (or a Chinese tag for Taiwan, Hong Kong or Macau) TW, cs CZ, en US, otherwise the
+  // language code in upper case (DE, FR, PL, ...).
+  [[nodiscard]] std::string GameLanguage(const std::string& tag)
+  {
+    const std::string language = tag.substr(0, tag.find('-'));
+    if (language == "zh") {
+      const bool traditional = tag.find("-Hant") != std::string::npos || tag.find("-TW") != std::string::npos
+        || tag.find("-HK") != std::string::npos || tag.find("-MO") != std::string::npos;
+      return traditional ? "TW" : "CN";
+    }
+    if (language == "cs") {
+      return "CZ";
+    }
+    if (language == "en") {
+      return "US";
+    }
+    return UpperCase(language);
+  }
+
+  [[nodiscard]] bool GameHasLanguage(const std::string& name)
+  {
+    const std::string strings = "/loc/" + name + "/strings_db.lua";
+    const moho::FWaitHandleSet* const files = moho::FILE_GetWaitHandleSet();
+    return !name.empty() && files != nullptr && files->mHandle != nullptr
+      && files->mHandle->GetFileInfo(strings.c_str(), nullptr); // as Lua's exists()
+  }
+
+  // macOS: the language. userInit.lua reads it from options_overrides.language, which only a
+  // pick in Options sets (selectedlanguage, copied there), and FAF's Options screen matches a
+  // pick against the installed languages by folder name, in upper case (CN, CZ, DE, ... US).
+  // With nothing stored, Localization.lua falls back to "us", the profile saves that as the
+  // option's default, and the Options screen showed the first language, CN, over English text.
+  // So a player without a pick gets the Mac's preferred language when the game has it (else
+  // US), and a lower-case pick is upper-cased. Runs before userInit.lua.
+  void ChooseLanguage()
+  {
+    moho::IUserPrefs* const preferences = moho::USER_GetPreferences();
+    if (preferences == nullptr) {
+      return;
+    }
+    try {
+      const LuaPlus::LuaObject picked = preferences->LookupCurrentOption(msvc8::string("selectedlanguage"));
+      if (picked.IsString()) {
+        const std::string value = picked.GetString() != nullptr ? picked.GetString() : "";
+        if (UpperCase(value) != value) {
+          const LuaPlus::LuaObject profile = preferences->LookupKey(msvc8::string("profile"));
+          LuaPlus::LuaObject options = profile["profiles"][profile["current"].GetInteger()]["options"];
+          options.SetString("selectedlanguage", UpperCase(value).c_str());
+          gpg::Logf("language: %s (the profile's %s, in upper case)", UpperCase(value).c_str(), value.c_str());
+        }
+        return;
+      }
+      const msvc8::string key("options_overrides.language");
+      const msvc8::string stored = preferences->GetString(key, msvc8::string(""));
+      if (!stored.empty()) {
+        if (UpperCase(stored.c_str()) != stored.c_str()) {
+          preferences->SetString(key, msvc8::string(UpperCase(stored.c_str()).c_str()));
+        }
+        return;
+      }
+      char tag[64];
+      for (int index = 0; faf_posix::shell::PreferredLanguage(index, tag, sizeof(tag)); ++index) {
+        const std::string language = GameLanguage(tag);
+        if (GameHasLanguage(language)) {
+          preferences->SetString(key, msvc8::string(language.c_str()));
+          gpg::Logf("language: %s (the Mac's %s)", language.c_str(), tag);
+          return;
+        }
+      }
+      if (GameHasLanguage("US")) {
+        preferences->SetString(key, msvc8::string("US"));
+        gpg::Logf("language: US (the game has none of the Mac's languages)");
+      }
+    } catch (const std::exception& exception) {
+      gpg::Warnf("language: could not choose one: %s", exception.what());
+    }
+  }
+
+  // macOS: options FAF Native's setup window asks for (its UI Scale slider), for the game to
+  // take at its next start: faf-native-settings.txt beside the preferences file, "key = value"
+  // lines, which the game then deletes. ui_scale goes into the current profile; before FAF's
+  // lobby has made one (a new install), it becomes the option's default, which the engine
+  // reads for this start (ApplyUiScaleCorrection) and the new profile takes on. Runs after
+  // userInit.lua and before any options are read.
+  void ApplySetupWindowSettings()
+  {
+    moho::IUserPrefs* const preferences = moho::USER_GetPreferences();
+    LuaPlus::LuaState* const state = moho::USER_GetLuaState();
+    if (preferences == nullptr || state == nullptr) {
+      return;
+    }
+    // The preferences file's path as the engine keeps it, Windows style: C:\Users\...\Game.prefs.
+    std::string prefsPath = preferences->GetStr2()->c_str();
+    std::replace(prefsPath.begin(), prefsPath.end(), '\\', '/');
+    if (prefsPath.size() > 2 && prefsPath[1] == ':') {
+      prefsPath.erase(0, 2);
+    }
+    const std::filesystem::path request = std::filesystem::path(prefsPath).parent_path() / "faf-native-settings.txt";
+    std::ifstream file(request);
+    if (!file) {
+      return;
+    }
+    std::string line;
+    while (std::getline(file, line)) {
+      const std::size_t equals = line.find('=');
+      if (line.empty() || line[0] == '#' || equals == std::string::npos) {
+        continue;
+      }
+      std::string name = line.substr(0, equals);
+      name.erase(name.find_last_not_of(" \t") + 1);
+      const float value = std::strtof(line.c_str() + equals + 1, nullptr);
+      if (name != "ui_scale" || !(value >= 0.5f && value <= 4.0f)) {
+        gpg::Warnf("setup window: ignored \"%s\" in %s", line.c_str(), request.string().c_str());
+        continue;
+      }
+      try {
+        LuaPlus::LuaObject prefs = moho::SCR_Import(state, "/lua/user/prefs.lua");
+        LuaPlus::LuaFunction<LuaPlus::LuaObject> getProfile(prefs["GetCurrentProfile"]);
+        if (getProfile().IsTable()) {
+          LuaPlus::LuaFunction<LuaPlus::LuaObject> getField(prefs["GetFromCurrentProfile"]);
+          LuaPlus::LuaObject options = getField("options");
+          if (!options.IsTable()) {
+            options.AssignNewTable(state, 0, 0);
+          }
+          options.SetNumber("ui_scale", value);
+          LuaPlus::LuaFunction<LuaPlus::LuaObject> setField(prefs["SetToCurrentProfile"]);
+          (void)setField("options", options);
+          gpg::Logf("setup window: UI Scale %.4g", value);
+        } else {
+          preferences->SetNumber(msvc8::string("options_overrides.ui_scale.default"), value);
+          gpg::Logf("setup window: UI Scale %.4g (the default for the new profile)", value);
+        }
+      } catch (const std::exception& exception) {
+        gpg::Warnf("setup window: could not set the UI Scale: %s", exception.what());
+        return; // keep the request for the next start
+      }
+    }
+    file.close();
+    moho::USER_SavePreferences();
+    std::error_code ignored;
+    std::filesystem::remove(request, ignored);
   }
 } // namespace
 #endif
@@ -1061,7 +1225,13 @@ bool CScApp::Init()
   // with the real Lua one. Run it any later and those early imports get the
   // stub: SCR_Import hands back a boolean and the callers fail with
   // "index expected but got boolean".
+#if defined(FAF_POSIX)
+  ChooseLanguage();
+#endif
   moho::SCR_LuaDoScript(moho::USER_GetLuaState(), "/lua/userInit.lua", nullptr);
+#if defined(FAF_POSIX)
+  ApplySetupWindowSettings();
+#endif
 
   moho::USER_EnsureDocumentDirectories();
 
@@ -1517,7 +1687,17 @@ bool CScApp::CreateDevice()
     secondarySetupMode = true;
 
     const msvc8::string secondaryAdapter = moho::OPTIONS_GetString("secondary_adapter");
+#if defined(FAF_POSIX)
+    // macOS: a player who never chose a display mode (a new install, before FAF's lobby has
+    // made a profile) starts in a window. FA's default 1024,768,60 would be full screen at the
+    // panel's native mode here, which the Options screen shows as Windowed, since the display
+    // lists no such mode. SetupPrimaryAdapterSettings makes "windowed" the option's default,
+    // so the profile the lobby makes keeps it.
+    const msvc8::string primaryAdapter =
+      HasProfileOption("primary_adapter") ? moho::OPTIONS_GetString("primary_adapter") : msvc8::string("windowed");
+#else
     const msvc8::string primaryAdapter = moho::OPTIONS_GetString("primary_adapter");
+#endif
 
     if (!IsDisabledAdapterToken(secondaryAdapter) && !IsWindowedAdapterToken(primaryAdapter)) {
       context.AddHead(gpg::gal::Head{});

@@ -77,4 +77,9 @@ namespace faf_posix::shell
   // display again: the correction the UI is laid out with, cheap enough to read every frame
   // from any thread (the engine-drawn debug overlays, SimDriver.cpp REN_DebugTextScale).
   [[nodiscard]] float LastUiScaleCorrection() noexcept;
+
+  // The Mac's preferred languages (System Settings > General > Language & Region), most
+  // preferred first, as BCP 47 tags ("en-US", "zh-Hans-CN"): the one at `index`, copied into
+  // `tag` (`size` bytes, null-terminated). False past the end. Works without Init().
+  bool PreferredLanguage(int index, char* tag, int size) noexcept;
 } // namespace faf_posix::shell
