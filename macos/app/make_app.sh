@@ -4,6 +4,7 @@
 # SDK, so at run time it needs nothing outside the bundle but macOS and the game files.
 #   Contents/MacOS/FAF Native             the setup and status window (macos/app/setup, SwiftUI)
 #   Contents/Resources/faf-launch         the FAF client's launcher (macos/app/faf-launch)
+#   Contents/Resources/background-art.jpg the simple window's backdrop (macos/app/dmg, as on the disk image)
 #   Contents/Resources/licenses/          the bundled libraries' licences
 #   Contents/Helpers/FAF Native Game.app  the game, an app of its own (so macOS and per-app tools
 #                                         see it as one while it runs; Game-Info.plist):
@@ -135,6 +136,7 @@ ditto "$root/macos/fafengine-macos" "$game/Contents/Resources/fafengine-macos"
 
 cp "$root/macos/app/faf-launch" "$app/Contents/Resources/faf-launch"
 chmod 755 "$app/Contents/Resources/faf-launch"
+cp "$root/macos/app/dmg/background-art.jpg" "$app/Contents/Resources/background-art.jpg"
 
 lic=$app/Contents/Resources/licenses
 # licence <destination> <candidate...>: the first candidate that exists (Homebrew's layout, or

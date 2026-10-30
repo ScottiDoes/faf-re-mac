@@ -1,7 +1,7 @@
 // FAF Native's setup window (Setup.swift has the model, Theme.swift the look). Three step cards
 // (Forged Alliance files, the FAF client, play) over one panel whose pages slide sideways; the
 // window opens on the first unfinished step and moves on as each is done. App details live in the
-// toolbar.
+// toolbar (AppDetailsButton, also in the simple window).
 import AppKit
 import SwiftUI
 
@@ -15,10 +15,11 @@ struct SetupView: View {
     @State private var confirmApply = false
     @State private var confirmStop = false
     @State private var confirmReset = false
-    @State private var showAppDetails = false
 
-    private var gameReady: Bool { model.game?.isValid == true }
-    private var clientReady: Bool { model.rosettaInstalled && connected && !locationDiffers }
+    private var gameReady: Bool { model.gameReady }
+    private var clientReady: Bool { model.clientReady }
+    private var connected: Bool { model.clientConnected }
+    private var locationDiffers: Bool { model.clientLocationDiffers }
     private var currentStep: Step {
         if !gameReady { return .game }
         if !clientReady { return .client }
@@ -43,7 +44,7 @@ struct SetupView: View {
         .background { SetupWindowBackground().ignoresSafeArea() }
         .preferredColorScheme(.dark)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) { infoButton }
+            ToolbarItem(placement: .primaryAction) { AppDetailsButton() }
         }
         .onAppear { shown = startStep.flatMap { Step(rawValue: $0 - 1) } ?? currentStep }
         .onChange(of: currentStep) { _, step in go(to: step) }
@@ -456,18 +457,6 @@ struct SetupView: View {
             + "from GitHub, Adoptium and Maven Central, each checked against the checksum its source publishes."
     }
 
-    private var connected: Bool {
-        switch model.client.hookup {
-        case .thisApp, .handsOver: return true
-        case .noClient, .none, .otherLauncher: return false
-        }
-    }
-
-    private var locationDiffers: Bool {
-        guard let game = model.game, game.isValid, let clientPath = model.client.installationPath else { return false }
-        return URL(fileURLWithPath: clientPath).standardizedFileURL.path != game.url.standardizedFileURL.path
-    }
-
     // MARK: Step 3, Play
 
     @ViewBuilder private var playPage: some View {
@@ -513,10 +502,15 @@ struct SetupView: View {
     }
 
     private func gigabytes(_ bytes: Int64) -> String { String(format: "%.1f GB", Double(bytes) / 1e9) }
+}
 
-    // MARK: App details
+/// The toolbar's details button (in the full setup and the simple window): version, last launch,
+/// the logs folder.
+struct AppDetailsButton: View {
+    @EnvironmentObject private var model: SetupModel
+    @State private var showAppDetails = false
 
-    @ViewBuilder private var infoButton: some View {
+    var body: some View {
         if #available(macOS 26.0, *) {
             detailsButton.buttonStyle(.glass)
         } else {

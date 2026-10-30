@@ -73,6 +73,8 @@ Copy `FAF Native.app` into Applications and open it. The window walks through th
 2. **The FAF client.** The window downloads it, installs Rosetta if needed (macOS asks for an administrator password), and starts it. Log in once, then quit the client: the window then points the client at FAF Native and at the Forged Alliance files by itself, keeping a backup of the client's settings (**Reapply…** does it again). **Check for Updates** fetches a newer client.
 3. **Playing.** Choose the game's interface size (its UI Scale, 80 to 200 %) with the slider, which previews the size on this screen; the game takes it at its next start, and it can be changed later in the game's Options too. Then start games from the FAF client as usual.
 
+Once everything is set up and the player has seen it, FAF Native opens a smaller window from then on: **Start FAF Client** (**Show FAF Client** while it runs) and **Setup & Settings**, which brings back the full window. The full window also comes back by itself when something stops being ready.
+
 A new player's first game opens in a window, in the Mac's language when the game has it (otherwise US English).
 
 A player's Mac needs Apple silicon, macOS 14 or later, and Rosetta for the FAF client's Java runtime. The app keeps its data in `~/Library/Application Support/FAF Native` and its logs in `~/Library/Logs/FAF Native`.

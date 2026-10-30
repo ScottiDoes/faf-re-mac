@@ -38,6 +38,8 @@ enum Places {
 /// What the setup remembers between runs (config.json in Places.appSupport).
 struct Config: Codable {
     var gamePath: String?
+    /// The full setup has been on screen with everything ready: later launches open the simple window.
+    var setupSeen: Bool?
 
     static func load() -> Config {
         guard let data = try? Data(contentsOf: Places.config),
@@ -299,12 +301,18 @@ final class SetupModel: ObservableObject {
     @Published private(set) var rosettaInstalling = false
     /// What FAF Native is doing to the client right now (stopping it, resetting its window).
     @Published private(set) var clientBusy: String?
+    /// The simple window (SimpleView.swift) instead of the full setup: decided at launch, and left
+    /// for the full setup when the player asks or something stops being ready.
+    @Published private(set) var simpleMode = false
     private var lastAutoApplyAttempt: String?
     private var installTask: Task<Void, Never>?
     private var config = Config.load()
     private var cancelFlag = CancelFlag()
 
-    init() { refresh() }
+    init() {
+        refresh()
+        simpleMode = config.setupSeen == true && simpleModePossible
+    }
 
     func refresh() {
         rosettaInstalled = FileManager.default.fileExists(atPath: Places.rosetta.path)
@@ -322,7 +330,47 @@ final class SetupModel: ObservableObject {
         others = found.filter { $0 != game }
         measureGame()
         autoApplyClientSettingsIfReady()
+        if simpleMode && !simpleModePossible { simpleMode = false }
     }
+
+    // MARK: Readiness
+
+    var gameReady: Bool { game?.isValid == true }
+
+    /// Games started in the client open in FAF Native (this copy, or a launcher that hands over to it).
+    var clientConnected: Bool {
+        switch client.hookup {
+        case .thisApp, .handsOver: return true
+        case .noClient, .none, .otherLauncher: return false
+        }
+    }
+
+    /// The client's Forged Alliance location differs from the folder chosen in step 1.
+    var clientLocationDiffers: Bool {
+        guard let game, game.isValid, let clientPath = client.installationPath else { return false }
+        return URL(fileURLWithPath: clientPath).standardizedFileURL.path != game.url.standardizedFileURL.path
+    }
+
+    var clientReady: Bool { rosettaInstalled && clientConnected && !clientLocationDiffers }
+
+    var isReady: Bool { gameReady && clientReady }
+
+    /// Everything is set up, nothing about the app itself needs a word, and the client is FAF
+    /// Native's own (the simple window's one button starts it).
+    var simpleModePossible: Bool {
+        isReady && installedClient != nil && macOSTooOld == nil && !Places.translocated
+    }
+
+    /// The full setup is on screen with everything ready (AppWindow, FAFNativeApp.swift). A failed
+    /// save only means the full setup again next time.
+    func noteSetupSeen() {
+        guard config.setupSeen != true else { return }
+        config.setupSeen = true
+        try? config.save()
+    }
+
+    /// Setup & Settings in the simple window.
+    func showFullSetup() { simpleMode = false }
 
     func use(_ folder: URL) {
         let checked = GameFolder(folder)
@@ -499,6 +547,14 @@ final class SetupModel: ObservableObject {
         let info = ClientInfo.read()
         if info != client { client = info }
         autoApplyClientSettingsIfReady()
+        if simpleMode && !simpleModePossible { simpleMode = false }
+    }
+
+    /// Brings the running client's windows to the front (Show FAF Client in the simple window).
+    func showClient() {
+        for pid in ClientRunner.processIDs() {
+            NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateAllWindows])
+        }
     }
 
     func stopClient() {

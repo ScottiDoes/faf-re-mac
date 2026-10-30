@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Draws FAF Native's setup window into PNGs in build/setup-snapshot without showing it
 # (snapshot_setup.swift), from a copy of build/app/FAF Native.app (make_app.sh first), in three
-# situations, one PNG per step's page (<situation>-step1.png ... -step3.png):
+# situations, one PNG per step's page (<situation>-step1.png ... -step3.png) and one of the simple
+# window (<situation>-simple.png; the app opens it only when everything is ready):
 #   mac-*      this Mac as it is (read only: FAF_NATIVE_TEST_NO_AUTO_APPLY=1 keeps this test copy from
 #              connecting the player's FAF client to itself)
 #   fresh-*    a new player: an empty home folder (no FAF client, no Forged Alliance)

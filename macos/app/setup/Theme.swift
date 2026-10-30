@@ -33,6 +33,14 @@ enum Theme {
     static let orange = Color(hex: 0xFF9F0A)
     static let orangeBox = mix(0x1D1D1F, 0xFF9F0A, 0.1)
 
+    // The simple window, over the disk image's artwork (SimpleView.swift).
+    static let hangar = Color(hex: 0x0B1528)
+    static let hangarText = Color(hex: 0xB4BFD2)
+    static let hangarPillText = Color(hex: 0xC7CEDE)
+    static let hangarPill = Color(.sRGB, red: 8 / 255.0, green: 14 / 255.0, blue: 26 / 255.0, opacity: 0.72)
+    static let hangarBar = Color(.sRGB, red: 6 / 255.0, green: 10 / 255.0, blue: 20 / 255.0, opacity: 0.8)
+    static let accentEdge = mix(0x1A6EF0, 0xFFFFFF, 0.24)
+
     /// How pages and the step marker slide.
     static let slide = Animation.timingCurve(0.22, 0.8, 0.24, 1, duration: 0.42)
 
