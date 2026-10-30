@@ -12,6 +12,8 @@
 	<string>FAF Native</string>
 	<key>CFBundleDisplayName</key>
 	<string>FAF Native</string>
+	<key>CFBundleIconFile</key>
+	<string>FAFNative.icns</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

@@ -89,6 +89,7 @@ game=$app/Contents/Helpers/FAF\ Native\ Game.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/licenses" \
     "$game/Contents/MacOS" "$game/Contents/Frameworks" "$game/Contents/Resources/vulkan/icd.d"
+"$root/macos/app/icon/make_icon.sh" "$app/Contents/Resources/FAFNative.icns"
 for plist in Info Game-Info; do
     [[ $plist == Info ]] && dest=$app/Contents/Info.plist || dest=$game/Contents/Info.plist
     sed -e "s|@BUNDLE_ID@|$BUNDLE_ID|" -e "s|@BUILD@|$build|" -e "s|@MINOS@|${minos:-14.0}|" \

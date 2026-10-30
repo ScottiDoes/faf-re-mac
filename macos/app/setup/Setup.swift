@@ -289,13 +289,17 @@ final class SetupModel: ObservableObject {
     @Published private(set) var installedClient: InstalledClient?
     @Published private(set) var latestRelease: ClientRelease?
     @Published private(set) var releaseProblem: String?
+    @Published private(set) var checkingClientUpdate = false
+    @Published var pendingClientUpdate: ClientRelease?
     @Published private(set) var clientRunning = false
+    @Published private(set) var clientLaunching = false
     @Published private(set) var clientPrefsExist = false
     @Published private(set) var installFraction: Double?
     @Published private(set) var installText = ""
     @Published private(set) var rosettaInstalling = false
     /// What FAF Native is doing to the client right now (stopping it, resetting its window).
     @Published private(set) var clientBusy: String?
+    private var lastAutoApplyAttempt: String?
     private var installTask: Task<Void, Never>?
     private var config = Config.load()
     private var cancelFlag = CancelFlag()
@@ -317,6 +321,7 @@ final class SetupModel: ObservableObject {
         }
         others = found.filter { $0 != game }
         measureGame()
+        autoApplyClientSettingsIfReady()
     }
 
     func use(_ folder: URL) {
@@ -419,11 +424,46 @@ final class SetupModel: ObservableObject {
 
     var clientUpdateAvailable: Bool {
         guard let installed = installedClient, let latest = latestRelease else { return false }
-        return installed.clientVersion != latest.version
+        return latest.version.compare(installed.clientVersion, options: .numeric) == .orderedDescending
     }
 
-    func installClient() {
-        guard let release = latestRelease, !isInstallingClient else { return }
+    func checkForClientUpdate() {
+        guard let installed = installedClient, !checkingClientUpdate, !isInstallingClient else { return }
+        checkingClientUpdate = true
+        Task {
+            defer { checkingClientUpdate = false }
+            do {
+                let release = try await ClientRelease.fetch()
+                latestRelease = release
+                releaseProblem = nil
+                if release.version.compare(installed.clientVersion, options: .numeric) == .orderedDescending {
+                    if clientRunning {
+                        alert = "FAF client \(release.version) is available. Quit the client before installing the update."
+                    } else {
+                        pendingClientUpdate = release
+                    }
+                } else {
+                    alert = "FAF client \(installed.clientVersion) is up to date."
+                }
+            } catch {
+                releaseProblem = "Couldn't check for the latest FAF client: \(error.localizedDescription)"
+                alert = releaseProblem
+            }
+        }
+    }
+
+    func installPendingClientUpdate() {
+        guard let release = pendingClientUpdate else { return }
+        pendingClientUpdate = nil
+        installClient(release)
+    }
+
+    func installClient(_ requestedRelease: ClientRelease? = nil) {
+        guard let release = requestedRelease ?? latestRelease, !isInstallingClient else { return }
+        if installedClient != nil && clientRunning {
+            alert = "Quit the FAF client before installing an update."
+            return
+        }
         installFraction = 0
         installText = "Starting…"
         installTask = Task {
@@ -455,8 +495,10 @@ final class SetupModel: ObservableObject {
         guard !isCopying, !isInstallingClient, clientBusy == nil else { return }
         clientRunning = ClientRunner.isRunning()
         clientPrefsExist = FileManager.default.fileExists(atPath: Places.clientPrefs.path)
+        if clientPrefsExist || !clientRunning { clientLaunching = false }
         let info = ClientInfo.read()
         if info != client { client = info }
+        autoApplyClientSettingsIfReady()
     }
 
     func stopClient() {
@@ -501,10 +543,12 @@ final class SetupModel: ObservableObject {
 
     func startClient() {
         guard let installed = installedClient else { return }
+        clientLaunching = !clientPrefsExist
         do {
             try ClientRunner.start(installed)
             clientRunning = true
         } catch {
+            clientLaunching = false
             alert = "The FAF client didn't start: \(error.localizedDescription)"
         }
     }
@@ -532,15 +576,40 @@ final class SetupModel: ObservableObject {
         }
     }
 
-    /// Writes the executable decorator (and the Forged Alliance location chosen here) into the
-    /// client's settings, after a backup.
+    /// Connects games started in the client to FAF Native and uses the selected game folder.
     func applyClientSettings() {
         do {
             let backup = try ClientSettings.apply(gamePath: game?.isValid == true ? game?.url.path : nil)
-            refresh()
+            client = ClientInfo.read()
             alert = "Done. The client's previous settings are saved as \(backup.lastPathComponent) in ~/.faforever."
         } catch {
             alert = error.localizedDescription
+        }
+    }
+
+    /// The client writes its preferences after login and exit. Connect it once they are safe to edit.
+    private func autoApplyClientSettingsIfReady() {
+        guard !clientRunning, clientPrefsExist, clientBusy == nil, !Places.translocated,
+              let game, game.isValid else { return }
+        let connected: Bool
+        switch client.hookup {
+        case .thisApp, .handsOver: connected = true
+        default: connected = false
+        }
+        let locationMatches = client.installationPath.map {
+            URL(fileURLWithPath: $0).standardizedFileURL.path == game.url.standardizedFileURL.path
+        } ?? false
+        guard !connected || !locationMatches else { return }
+        let attributes = try? FileManager.default.attributesOfItem(atPath: Places.clientPrefs.path)
+        let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let attempt = "\(modified):\(game.url.standardizedFileURL.path):\(Places.launcher.path)"
+        guard lastAutoApplyAttempt != attempt else { return }
+        lastAutoApplyAttempt = attempt
+        do {
+            _ = try ClientSettings.apply(gamePath: game.url.path)
+            client = ClientInfo.read()
+        } catch {
+            alert = "FAF Native couldn't connect the client automatically: \(error.localizedDescription)"
         }
     }
 
