@@ -11,8 +11,9 @@ struct FAFNativeApp: App {
         Window("FAF Native", id: "setup") {
             SetupView()
                 .environmentObject(model)
-                .frame(minWidth: 600, idealWidth: 640, minHeight: 560, idealHeight: 680)
+                .frame(minWidth: 760, idealWidth: 880, minHeight: 640, idealHeight: 780)
         }
+        .defaultSize(width: 880, height: 780)
         .windowResizability(.contentMinSize)
     }
 }

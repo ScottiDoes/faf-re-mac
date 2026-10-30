@@ -273,31 +273,37 @@ struct InterfaceScaleSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Interface size").fontWeight(.semibold)
+                Text("Interface size").font(.system(size: 14, weight: .semibold))
                 Spacer()
-                Text("\(Int((scale * 100).rounded()))%").monospacedDigit()
+                Text("\(Int((scale * 100).rounded()))%")
+                    .font(.system(size: 14, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.accentText)
             }
             Slider(value: $step, in: 0...Double(GamePrefs.uiScales.count - 1), step: 1) {
                 EmptyView()
             } minimumValueLabel: {
-                Text("80%").font(.caption)
+                Text("80%").font(.system(size: 11)).foregroundStyle(Theme.tertiary)
             } maximumValueLabel: {
-                Text("200%").font(.caption)
+                Text("200%").font(.system(size: 11)).foregroundStyle(Theme.tertiary)
             }
+            .tint(Theme.accent)
             .accessibilityLabel("Interface size")
             .accessibilityValue("\(Int((scale * 100).rounded())) percent")
             HStack(alignment: .top, spacing: 12) {
                 ScreenMiniature(screen: screen, scale: scale)
-                InterfaceSample(pixel: screen.pointsPerPixel * scale)
+                InterfaceSample(pixel: screen.pointsPerPixel * scale, height: ScreenMiniature.height(of: screen))
             }
             if let problem {
                 StatusRow(kind: .problem, title: problem)
             } else {
                 Text(pending ? "The game takes this size the next time it starts." : "The size the game uses now.")
-                    .font(.callout)
+                    .font(.system(size: 12.5))
                 Text("Left: roughly how much of this screen the game's controls cover. Right: part of the game's interface "
                     + "at actual size. In the game it's under Options, Interface, UI Scale.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .onAppear(perform: load)
@@ -341,9 +347,12 @@ private struct ScreenMiniature: View {
         (390, -1, 640, 130),  // construction
     ]
 
+    static let width: CGFloat = 190
+    static func height(of screen: ScreenScale) -> CGFloat { width * screen.size.height / max(screen.size.width, 1) }
+
     var body: some View {
-        let width: CGFloat = 220
-        let height = width * screen.size.height / max(screen.size.width, 1)
+        let width = Self.width
+        let height = Self.height(of: screen)
         let points = width / screen.size.width * CGFloat(screen.pointsPerPixel * scale)
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 4).fill(Color(red: 0.16, green: 0.22, blue: 0.16))
@@ -369,6 +378,8 @@ private struct ScreenMiniature: View {
 private struct InterfaceSample: View {
     /// Points per interface pixel at the chosen UI Scale.
     let pixel: Double
+    /// The miniature's height beside it.
+    let height: CGFloat
 
     var body: some View {
         let px = CGFloat(pixel)
@@ -390,7 +401,7 @@ private struct InterfaceSample: View {
         }
         .padding(8 * px)
         .fixedSize()
-        .frame(maxWidth: .infinity, minHeight: 124, maxHeight: 124, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
         .background(Color(red: 0.08, green: 0.09, blue: 0.1))
         .clipShape(RoundedRectangle(cornerRadius: 4))
         .accessibilityHidden(true)

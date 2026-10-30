@@ -1,6 +1,6 @@
-// Draws FAF Native's setup window (macos/app/setup/SetupView.swift) offscreen into PNGs, light and
-// dark, from the model's real state on this Mac: a way to look at the window without opening it on
-// screen. macos/tests/app/snapshot_setup.sh builds and runs it from inside a copy of the app, so the
+// Draws FAF Native's setup window (macos/app/setup/SetupView.swift) offscreen into PNGs, one per
+// step's page, from the model's real state on this Mac: a way to look at the window without opening
+// it on screen. macos/tests/app/snapshot_setup.sh builds and runs it from inside a copy of the app, so the
 // paths it shows (the launcher line) are the app's. With FAF_NATIVE_TEST_HOME set the app sees that
 // folder as the home; SNAPSHOT_COPY=1 also copies the game files into it first, SNAPSHOT_APPLY=1
 // presses "Reapply...", SNAPSHOT_INSTALL_CLIENT=1 downloads and installs the FAF client into it.
@@ -12,7 +12,7 @@ struct SnapshotSetup {
     @MainActor static func main() throws {
         NSApplication.shared.setActivationPolicy(.prohibited)
         let base = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "setup"
-        let size = NSRect(x: 0, y: 0, width: 640, height: 1150)
+        let size = NSRect(x: 0, y: 0, width: 880, height: 728)   // the window's content, under its toolbar
         let model = SetupModel()
         // The folder size is measured and the latest client release fetched off the main thread.
         let ready = Date().addingTimeInterval(20)
@@ -42,11 +42,12 @@ struct SnapshotSetup {
             print("apply: \(model.alert ?? "no message")")
             model.alert = nil
         }
-        for (name, look) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
-            let view = NSHostingView(rootView: SetupView().environmentObject(model).frame(width: size.width, height: size.height))
+        // Each step's page (the window itself opens on the first unfinished one).
+        for step in 1...3 {
+            let name = "step\(step)"
+            let view = NSHostingView(rootView: SetupView(startStep: step).environmentObject(model).frame(width: size.width, height: size.height))
             view.frame = size
             let window = NSWindow(contentRect: size, styleMask: [.titled], backing: .buffered, defer: false)
-            window.appearance = NSAppearance(named: look)
             window.contentView = view
             view.layoutSubtreeIfNeeded()
             RunLoop.main.run(until: Date().addingTimeInterval(1))

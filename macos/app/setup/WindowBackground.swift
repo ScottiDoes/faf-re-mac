@@ -1,24 +1,26 @@
-// Frost the desktop behind the setup window while the grouped steps remain readable.
+// The setup window's solid dark ground (Theme.window), also under its transparent title bar, so the
+// title and the details button sit on the same colour as the steps.
 import AppKit
 import SwiftUI
 
 struct SetupWindowBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = FrostedBackgroundView()
-        view.material = .hudWindow
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
-    }
+    func makeNSView(context: Context) -> NSView { ThemedBackgroundView() }
 
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+    func updateNSView(_ view: NSView, context: Context) {}
 }
 
-private final class FrostedBackgroundView: NSVisualEffectView {
+private final class ThemedBackgroundView: NSView {
+    override var isOpaque: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        Theme.windowNS.setFill()
+        dirtyRect.fill()
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        window?.isOpaque = false
-        window?.backgroundColor = .clear
+        window?.backgroundColor = Theme.windowNS
         window?.titlebarAppearsTransparent = true
+        window?.appearance = NSAppearance(named: .darkAqua)
     }
 }
