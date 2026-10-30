@@ -588,7 +588,10 @@ final class SetupModel: ObservableObject {
     }
 
     /// The client writes its preferences after login and exit. Connect it once they are safe to edit.
+    /// (Not for macos/tests/app/snapshot_setup.sh's look at this Mac, FAF_NATIVE_TEST_NO_AUTO_APPLY=1:
+    /// a test copy of the app would take over the player's client.)
     private func autoApplyClientSettingsIfReady() {
+        guard ProcessInfo.processInfo.environment["FAF_NATIVE_TEST_NO_AUTO_APPLY"] != "1" else { return }
         guard !clientRunning, clientPrefsExist, clientBusy == nil, !Places.translocated,
               let game, game.isValid else { return }
         let connected: Bool

@@ -420,6 +420,8 @@ struct SetupView: View {
 
     private var playSection: some View {
         stepCard(.play, title: "Step 3 — Play the game", complete: false) {
+            InterfaceScaleSection()
+            Divider()
             HStack {
                 Spacer()
                 Button("Start FAF Client") { model.startClient() }

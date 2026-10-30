@@ -3,7 +3,7 @@
 // screen. macos/tests/app/snapshot_setup.sh builds and runs it from inside a copy of the app, so the
 // paths it shows (the launcher line) are the app's. With FAF_NATIVE_TEST_HOME set the app sees that
 // folder as the home; SNAPSHOT_COPY=1 also copies the game files into it first, SNAPSHOT_APPLY=1
-// presses "Apply for Me", SNAPSHOT_INSTALL_CLIENT=1 downloads and installs the FAF client into it.
+// presses "Reapply...", SNAPSHOT_INSTALL_CLIENT=1 downloads and installs the FAF client into it.
 import AppKit
 import SwiftUI
 

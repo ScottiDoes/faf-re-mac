@@ -70,8 +70,10 @@ Each is checked against its source's checksum. The window offers an update when 
 Copy `FAF Native.app` into Applications and open it. The window walks through the rest:
 
 1. **Forged Alliance files.** The player's own copy (Steam, GOG or disc) is used where it is, for example in a CrossOver or Wine bottle, or in a folder copied from a Windows PC. It can also be copied into the app's own folder.
-2. **The FAF client.** The window downloads it, installs Rosetta if needed (macOS asks for an administrator password), and starts it. After the first login, **Apply for Me** points the client at FAF Native and at the Forged Alliance files, keeping a backup of the client's settings.
-3. **Playing.** Start games from the FAF client as usual.
+2. **The FAF client.** The window downloads it, installs Rosetta if needed (macOS asks for an administrator password), and starts it. Log in once, then quit the client: the window then points the client at FAF Native and at the Forged Alliance files by itself, keeping a backup of the client's settings (**Reapply…** does it again). **Check for Updates** fetches a newer client.
+3. **Playing.** Choose the game's interface size (its UI Scale, 80 to 200 %) with the slider, which previews the size on this screen; the game takes it at its next start, and it can be changed later in the game's Options too. Then start games from the FAF client as usual.
+
+A new player's first game opens in a window, in the Mac's language when the game has it (otherwise US English).
 
 A player's Mac needs Apple silicon, macOS 14 or later, and Rosetta for the FAF client's Java runtime. The app keeps its data in `~/Library/Application Support/FAF Native` and its logs in `~/Library/Logs/FAF Native`.
 

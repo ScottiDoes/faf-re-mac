@@ -2,11 +2,12 @@
 # Draws FAF Native's setup window into PNGs in build/setup-snapshot without showing it
 # (snapshot_setup.swift), from a copy of build/app/FAF Native.app (make_app.sh first), in three
 # situations, light and dark:
-#   mac-*      this Mac as it is
+#   mac-*      this Mac as it is (read only: FAF_NATIVE_TEST_NO_AUTO_APPLY=1 keeps this test copy from
+#              connecting the player's FAF client to itself)
 #   fresh-*    a new player: an empty home folder (no FAF client, no Forged Alliance)
 #   copied-*   a home with a small stand-in Forged Alliance install and FAF client data, after the
 #              window's "Copy into FAF Native" (the copy itself runs, into that home)
-#   applied-*  the same home after "Apply for Me" (writes its .faforever/client.prefs, with a backup)
+#   applied-*  the same home after "Reapply..." (writes its .faforever/client.prefs, with a backup)
 #   desktop-*  that stand-in install on the Desktop (the warning about guarded folders)
 #   client-*   with CLIENT_INSTALL=1 only: a home kept in build/client-install-test where the window
 #              downloads and installs the FAF client (about 260 MB, once; later runs reuse it)
@@ -25,7 +26,7 @@ sources=(${sources:#*/FAFNativeApp.swift})   # the app's entry point; snapshot_s
 xcrun --sdk macosx swiftc -parse-as-library -target arm64-apple-macos14.0 \
     -o "$out/FAF Native.app/Contents/MacOS/snapshot" "${sources[@]}" "${0:A:h}/snapshot_setup.swift"
 snap=$out/FAF\ Native.app/Contents/MacOS/snapshot
-"$snap" "$out/mac"
+FAF_NATIVE_TEST_NO_AUTO_APPLY=1 "$snap" "$out/mac"
 
 mkdir -p "$out/fresh-home"
 FAF_NATIVE_TEST_HOME=$out/fresh-home "$snap" "$out/fresh"
