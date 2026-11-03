@@ -99,3 +99,5 @@ FAF Native is built on [faf-re](https://github.com/Draiget/faf-re) by Draiget.
 FAF Native isn't affiliated with Forged Alliance Forever, or with the original publisher or developer of *Supreme Commander: Forged Alliance*. It includes no game content: you need your own copy of the game.
 
 How the port works, and how to work on it: [macos/BUILDING.md](../macos/BUILDING.md), [the platform layer](../src/platform/posix/README.md) and [macos/docs](../macos/docs).
+
+The Mac build files in [macos/](../macos) are MIT licensed: [macos/LICENSE](../macos/LICENSE).
