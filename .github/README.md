@@ -10,19 +10,21 @@ FAF Native is one app:
 - **a setup window** that finds your Forged Alliance files, downloads and sets up the FAF client, and connects the two;
 - **the launcher** the FAF client starts games through, in place of the Windows game.
 
-There are no ready-made downloads: you build your own copy of the app, with one command.
-
 ## What you need
 
 - A Mac with Apple silicon and macOS 14 or later.
-- Apple's Command Line Tools (`xcode-select --install` in Terminal) or Xcode.
 - Your own copy of *Supreme Commander: Forged Alliance* (Steam, GOG or disc): its installed files, for example in a CrossOver or Wine bottle, or a folder copied from a Windows PC.
 - A [FAF](https://faforever.com) account.
-- About 4 GB of free space for the build.
 
-## Build and install
+## Download
 
-In Terminal:
+**[Download FAF Native](https://github.com/ScottiDoes/faf-re-mac/releases/latest/download/FAF-Native.dmg)**. It's signed with a Developer ID and notarized by Apple, so it opens like any other app. Open the disk image, drag FAF Native onto Applications, then open it from there.
+
+To update, download the newest one and replace the app. Earlier versions and their notes are under [Releases](https://github.com/ScottiDoes/faf-re-mac/releases).
+
+## Build it yourself
+
+You also need Apple's Command Line Tools (`xcode-select --install` in Terminal) or Xcode, and about 4 GB of free space. In Terminal:
 
 ```sh
 zsh -c "$(curl -fsSL https://raw.githubusercontent.com/ScottiDoes/faf-re-mac/macos-native/macos/get.sh)"
@@ -82,13 +84,13 @@ From then on, FAF Native opens the small window above. **Setup & Settings** brin
 | The app's data (the FAF client, settings, a copied game) | `~/Library/Application Support/FAF Native` |
 | Logs (`launch.log`, `game-output.log`) | `~/Library/Logs/FAF Native` |
 | The FAF client's own data (maps, mods, replays, `client.prefs`) | `~/.faforever` |
-| The source and the build | `~/faf-re-mac` |
+| The source and the build, if you built it | `~/faf-re-mac` |
 
-To remove FAF Native, delete the app, `~/Library/Application Support/FAF Native`, `~/Library/Logs/FAF Native` and `~/faf-re-mac`. `~/.faforever` belongs to the FAF client. FAF Native's backups of the client's settings are kept there as `client.prefs.before-faf-native-<time>`.
+To remove FAF Native, delete the app, `~/Library/Application Support/FAF Native`, `~/Library/Logs/FAF Native` and, if you built it, `~/faf-re-mac`. `~/.faforever` belongs to the FAF client. FAF Native's backups of the client's settings are kept there as `client.prefs.before-faf-native-<time>`.
 
-## Other Macs
+## Sharing a build
 
-The app you build is signed ad hoc, so it runs on your Mac. On another Mac, macOS blocks its first launch. Building on that Mac avoids this, or see [Sharing the app](../macos/BUILDING.md#sharing-the-app) for **Open Anyway** and for signing with a Developer ID.
+The download opens on any Mac. An app you build yourself is signed ad hoc, so it runs on your Mac, but macOS blocks its first launch on another one. [Sharing the app](../macos/BUILDING.md#sharing-the-app) covers **Open Anyway**, and signing and notarizing with your own Developer ID ([`macos/release.sh`](../macos/release.sh)), which can also publish the result as a GitHub release.
 
 ## About
 
