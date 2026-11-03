@@ -24,7 +24,7 @@ The port is merged with faf-re often, so every changed line in a faf-re file is 
 
 ## Games must match Windows
 
-Mac players share online games and replays with Windows players, so the Mac must compute exactly what the Windows engine does, bit for bit ([macos/docs/DETERMINISM.md](../macos/docs/DETERMINISM.md)). A change that can reach the simulation (math, the x87 emulation, C runtime functions, threading, compiler flags) needs a replay check: play FAF replays with the headless checker (`macos/run_replay.sh`, or `macos/verify_replays.sh` for a set; [macos/porting/runner.md](../macos/porting/runner.md)) and list every replay in the pull request, failures included.
+Mac players share online games and replays with Windows players, so the Mac must compute exactly what the Windows engine does, bit for bit ([macos/docs/DETERMINISM.md](../macos/docs/DETERMINISM.md)). A change that can reach the simulation (math, the x87 emulation, C runtime functions, threading, compiler flags) needs a replay check: make a run folder from your FAF client's files (`macos/make_run_folder.sh`), play FAF replays with the headless checker (`REPLAY=<file> macos/run_replay.sh`, or `macos/verify_replays.sh` for a set; [macos/porting/runner.md](../macos/porting/runner.md)) and list every replay in the pull request, failures included.
 
 Changes to the app, the window, rendering, audio or docs don't need one. Say what you checked by hand instead.
 
