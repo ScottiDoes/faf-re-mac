@@ -50,13 +50,23 @@ namespace moho
     const std::string kDefaultEndpoint = std::string(kDefaultScheme) + kTelemetryDefaultHost;
   } // namespace
 
+#if defined(FAF_POSIX)
+  // macOS: off by default (records would go out as plain HTTP); /telemetry or
+  // telemetry_Enabled 1 turns it on.
+  bool telemetry_Enabled = false;
+#else
   bool telemetry_Enabled = true;
+#endif
 
   TConVar<bool> gTConVar_telemetry_Enabled(
     "telemetry_Enabled",
     "Send one small record per desync and one per game end of a live multiplayer game to telemetry_Endpoint "
     "(OTLP/HTTP JSON), and the desync dump to telemetry_DumpEndpoint. The records carry no names, ids or paths. "
+#if defined(FAF_POSIX)
+    "Off by default on macOS; /telemetry turns it on.",
+#else
     "On by default; /notelemetry turns it off.",
+#endif
     &telemetry_Enabled
   );
 

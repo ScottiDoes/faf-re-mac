@@ -10,6 +10,7 @@ namespace moho
   /**
    * Engine addition (issues #218, #219): desync telemetry, on by default and sent to the faf-re
    * desync server (`kTelemetryDefaultHost`); `/notelemetry` or `telemetry_Enabled 0` turns it off.
+   * The macOS build (FAF_POSIX) has it off by default; `/telemetry` turns it on.
    * Only live multiplayer games send: one `faf.desync` log record per player whose hash differed
    * from ours at the first desync, and one `faf.game.end` record at the game's end, as OTLP/HTTP
    * JSON to `telemetry_Endpoint` (+ `/v1/logs`). Off, nothing starts: no thread, no file, no
