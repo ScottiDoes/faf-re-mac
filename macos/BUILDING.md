@@ -15,6 +15,14 @@ git clone -b macos-native https://github.com/ScottiDoes/faf-re-mac.git faf-re
 faf-re/macos/build_app.sh
 ```
 
+Or let `macos/get.sh` clone (or update) the repository into `~/faf-re-mac`, run `build_app.sh` and copy the app into Applications, in one go:
+
+```sh
+zsh -c "$(curl -fsSL https://raw.githubusercontent.com/ScottiDoes/faf-re-mac/macos-native/macos/get.sh)"
+```
+
+Its options are at the top of the script (`FAF_NATIVE_SOURCE`, `FAF_NATIVE_APPLICATIONS=none` to only build, and this script's own below).
+
 The app lands in `build/dist`: `FAF Native.app`, and the same as `FAF-Native-<commit>.dmg` and `FAF-Native-<commit>.zip` to pass on. Opening the disk image shows the app beside a shortcut to Applications, with a background that says to drag one onto the other. The first run downloads about 520 MB and compiles for a while. After that, running it again only redoes what changed.
 
 ### What the script does
