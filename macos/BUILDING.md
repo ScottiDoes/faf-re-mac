@@ -112,6 +112,8 @@ SIGN_IDENTITY=... NOTARY_PROFILE=... macos/release.sh faf-native-2026.11.03
 
 `https://github.com/<owner>/<repo>/releases/latest/download/FAF-Native.dmg` then always downloads the newest release. `GH_REPO=<owner>/<name>` picks the repository when the branch's remote isn't the GitHub one.
 
+Without a Developer ID, `AD_HOC=1 macos/release.sh [tag]` makes and publishes the same release, signed ad hoc and not notarized. Other Macs block its first launch until it's allowed as described above. The release is titled "(not notarized)", and its notes say how to open it.
+
 ## For development
 
 - `macos/app/deploy.sh` builds the development tree (`build/macos`, Homebrew's SDL3 and FAudio), checks it against a recorded replay, and installs the app on this Mac, keeping the previous one for `deploy.sh rollback`.

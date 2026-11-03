@@ -5,16 +5,23 @@
 # release of this commit with the disk image as FAF-Native.dmg, so this link always gets the newest:
 #   https://github.com/<owner>/<repo>/releases/latest/download/FAF-Native.dmg
 #
+# Without a Developer ID, AD_HOC=1 makes the same release signed ad hoc and not notarized: other
+# Macs then block its first launch until it's allowed in System Settings (Open Anyway), and the
+# release is titled "(not notarized)", with notes saying how to open it.
+#
 # Usage: SIGN_IDENTITY=<identity> NOTARY_PROFILE=<profile> macos/release.sh [tag]
+#        AD_HOC=1 macos/release.sh [tag]
 # Environment:
 #   SIGN_IDENTITY   a "Developer ID Application" identity (its SHA-1 if two certificates share a name)
 #   NOTARY_PROFILE  a notarytool keychain profile (xcrun notarytool store-credentials <profile> ...)
+#   AD_HOC=1        no Developer ID: skip signing with one and notarizing
 #   GH_REPO         owner/name to publish to (default: the GitHub remote of this branch)
 #   and build_app.sh's own (OUT, JOBS, ...)
 # Run it from a clean checkout of a commit that is on GitHub: the app reports that commit.
 set -eu
 root=${0:A:h:h}
 tag=${1:-}
+adhoc=${AD_HOC:-0}
 OUT=${${OUT:-$root/build/dist}:A}
 export OUT
 
@@ -33,10 +40,15 @@ notarize() {
 }
 
 step "Checking"
-[[ -n ${SIGN_IDENTITY:-} ]] || fail "set SIGN_IDENTITY to your Developer ID Application identity"
-[[ -n ${NOTARY_PROFILE:-} ]] || fail "set NOTARY_PROFILE to a notarytool keychain profile"
-security find-identity -v -p codesigning | grep -F -- "$SIGN_IDENTITY" | grep -q "Developer ID Application" ||
-    fail "no valid Developer ID Application identity matches $SIGN_IDENTITY in the keychain"
+if [[ $adhoc == 1 ]]; then
+    unset SIGN_IDENTITY NOTARY_PROFILE
+    note "AD_HOC=1: signed ad hoc, not notarized (other Macs block the first launch until it's allowed)"
+else
+    [[ -n ${SIGN_IDENTITY:-} && -n ${NOTARY_PROFILE:-} ]] ||
+        fail "set SIGN_IDENTITY (a Developer ID Application identity) and NOTARY_PROFILE (a notarytool profile), or AD_HOC=1 to release without a Developer ID"
+    security find-identity -v -p codesigning | grep -F -- "$SIGN_IDENTITY" | grep -q "Developer ID Application" ||
+        fail "no valid Developer ID Application identity matches $SIGN_IDENTITY in the keychain (or AD_HOC=1 to release without one)"
+fi
 git -C "$root" diff --quiet HEAD -- || fail "this checkout has changes: release a clean commit"
 commit=$(git -C "$root" rev-parse HEAD)
 short=$(git -C "$root" rev-parse --short=8 HEAD)   # as build_app.sh names the zip and disk image
@@ -61,21 +73,23 @@ zip=$OUT/FAF-Native-$short.zip
 dmg=$OUT/FAF-Native-$short.dmg
 codesign --verify --deep --strict "$app" || fail "the app's signature does not verify"
 
-step "Notarizing the app"
-notarize "$zip"
-xcrun stapler staple -q "$app"
+if [[ $adhoc != 1 ]]; then
+    step "Notarizing the app"
+    notarize "$zip"
+    xcrun stapler staple -q "$app"
 
-step "The disk image, from the stapled app"
-rm -f "$zip" "$dmg"
-ditto -c -k --keepParent "$app" "$zip"
-"$root/macos/app/dmg/make_dmg.sh" "$app" "$dmg" >/dev/null
-notarize "$dmg"
-xcrun stapler staple -q "$dmg"
+    step "The disk image, from the stapled app"
+    rm -f "$zip" "$dmg"
+    ditto -c -k --keepParent "$app" "$zip"
+    "$root/macos/app/dmg/make_dmg.sh" "$app" "$dmg" >/dev/null
+    notarize "$dmg"
+    xcrun stapler staple -q "$dmg"
 
-step "Checking with Gatekeeper"
-spctl -a -t exec -vv "$app" 2>&1 | grep -q "source=Notarized Developer ID" || fail "Gatekeeper does not accept the app"
-spctl -a -t install -vv "$dmg" 2>&1 | grep -q "source=Notarized Developer ID" || fail "Gatekeeper does not accept the disk image"
-note "app and disk image: Notarized Developer ID"
+    step "Checking with Gatekeeper"
+    spctl -a -t exec -vv "$app" 2>&1 | grep -q "source=Notarized Developer ID" || fail "Gatekeeper does not accept the app"
+    spctl -a -t install -vv "$dmg" 2>&1 | grep -q "source=Notarized Developer ID" || fail "Gatekeeper does not accept the disk image"
+    note "app and disk image: Notarized Developer ID"
+fi
 cp "$dmg" "$OUT/FAF-Native.dmg"
 sum=$(shasum -a 256 "$OUT/FAF-Native.dmg" | cut -d' ' -f1)
 note "$OUT/FAF-Native.dmg ($(du -h "$dmg" | cut -f1 | tr -d ' '), SHA-256 $sum)"
@@ -86,10 +100,23 @@ if [[ -z $tag ]]; then
 fi
 
 step "Publishing $tag"
-notes="FAF Native $short, for Macs with Apple silicon and macOS 14 or later. Signed with a Developer ID and notarized by Apple.
+title="FAF Native ${tag#faf-native-}"
+if [[ $adhoc == 1 ]]; then
+    title+=" (not notarized)"
+    notes="FAF Native $short, for Macs with Apple silicon and macOS 14 or later. **Not notarized:** it isn't signed with a Developer ID, so macOS blocks it the first time it's opened.
 
-Open **FAF-Native.dmg** and drag FAF Native onto Applications, then open it from there: its window walks through the rest (your Forged Alliance files and the FAF client).
+Open **FAF-Native.dmg** and drag FAF Native onto Applications. Then either:
+- open it, choose **Done** when macOS refuses, and allow it under System Settings → Privacy & Security → **Open Anyway**; or
+- in Terminal, run \`xattr -dr com.apple.quarantine \"/Applications/FAF Native.app\"\`.
+
+Its window then walks through the rest (your Forged Alliance files and the FAF client)."
+else
+    notes="FAF Native $short, for Macs with Apple silicon and macOS 14 or later. Signed with a Developer ID and notarized by Apple.
+
+Open **FAF-Native.dmg** and drag FAF Native onto Applications, then open it from there: its window walks through the rest (your Forged Alliance files and the FAF client)."
+fi
+notes+="
 
 SHA-256 of FAF-Native.dmg: \`$sum\`"
-gh release create "$tag" "$OUT/FAF-Native.dmg" --target "$commit" --title "FAF Native ${tag#faf-native-}" --notes "$notes"
+gh release create "$tag" "$OUT/FAF-Native.dmg" --target "$commit" --title "$title" --notes "$notes"
 print "\nDone: https://github.com/$GH_REPO/releases/tag/$tag"
