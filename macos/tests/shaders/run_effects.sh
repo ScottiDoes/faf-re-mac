@@ -6,7 +6,7 @@
 # Needs a configured and built tree (cmake -S macos -B build/m2-shaders -G Ninja
 # -DCMAKE_BUILD_TYPE=Release && ninja -C build/m2-shaders faf_replay). Links effects_test
 # from faf_replay's objects with the runner swapped for the test, extracts the effects from the
-# game data that ~/Gaming/.faf/faf-re-bin/run-native/init_faf.lua mounts (FAF's effects.nx2
+# game data that the run folder's init_faf.lua mounts (macos/dev_paths.sh; FAF's effects.nx2
 # ahead of FA's effects.scd; plus faforever.faf's copies, which that init file does not
 # mount), runs every set with a fresh shader cache, then a warm-cache and a parallel run
 # of the FAF set, then spirv-val and spirv-cross (MSL, what MoltenVK does) on every module.
@@ -14,7 +14,8 @@
 set -u
 root=${0:A:h:h:h:h}
 tree=${1:-$root/build/m2-shaders}
-sdk=${FAF_VULKAN_SDK:-$HOME/Gaming/.faf/VulkanSDK/1.4.363.0/macOS}
+source "$root/macos/dev_paths.sh"
+sdk=$FAF_VULKAN_SDK
 out=$root/build/m2-shaders-tests
 mkdir -p $out
 export PATH=/opt/homebrew/bin:$PATH
@@ -51,8 +52,9 @@ PY
   -framework CoreServices -framework ApplicationServices -o $out/effects_test) || { print -u2 "effects_test does not link"; exit 1; }
 
 # --- effects -------------------------------------------------------------------------
-fa="$HOME/Gaming/Windows Steam (GPTK)/Windows Steam.app/Contents/SharedSupport/prefix/drive_c/Program Files (x86)/Steam/steamapps/common/Supreme Commander Forged Alliance"
-python3 -I - "$out/effects" "$fa/gamedata/effects.scd" fa "$HOME/Gaming/.faf/faf-re-bin/gamedata/effects.nx2" faf "$HOME/Gaming/.faf/faf-re-bin/gamedata/faforever.faf" faforever <<'PY' || exit 1
+fa=$(faf_fa_install)
+gamedata=${FAF_RUN_DIR:h}/gamedata
+python3 -I - "$out/effects" "$fa/gamedata/effects.scd" fa "$gamedata/effects.nx2" faf "$gamedata/faforever.faf" faforever <<'PY' || exit 1
 import sys, zipfile, os
 out, a = sys.argv[1], sys.argv[2:]
 for i in range(0, len(a), 2):

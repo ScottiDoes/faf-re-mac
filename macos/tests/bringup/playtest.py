@@ -30,7 +30,7 @@
 #                            "key Up down", "text hello", "wheel X Y N", "focus lost", ...)
 # Output: <out-dir>/game.log, shots/*.png, steps.txt (the expanded script), playtest.out.
 # Python 3 stdlib only: python3 -I macos/tests/bringup/playtest.py scenario.txt out/
-import os, shlex, subprocess, sys
+import os, shlex, subprocess, sys, tempfile
 
 here = os.path.dirname(os.path.abspath(__file__))
 root = os.path.dirname(os.path.dirname(os.path.dirname(here)))
@@ -118,12 +118,12 @@ def main():
             dst.write(src.read())
     with open(os.path.join(out, "steps.txt"), "w") as f:
         f.write("\n".join(steps) + "\n")
-    # dump_Frame splits its argument at spaces: reach the folder through a path without one
-    # (~/Gaming/.faf/faf-re links to the repository on this machine).
+    # dump_Frame splits its argument at spaces: reach the folder through a link without one.
     dumps = os.path.join(out, "dumps")
-    alias = os.path.expanduser("~/Gaming/.faf/faf-re")
-    if " " in dumps and os.path.realpath(alias) == os.path.realpath(root):
-        dumps = alias + dumps[len(os.path.realpath(root)):]
+    if " " in dumps:
+        link = os.path.join(tempfile.mkdtemp(prefix="faf-playtest-"), "out")
+        os.symlink(os.path.abspath(out), link)
+        dumps = os.path.join(link, "dumps")
     if os.path.isdir(dumps):
         for d in os.listdir(dumps):
             for f in os.listdir(os.path.join(dumps, d)):

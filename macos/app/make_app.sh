@@ -32,7 +32,7 @@
 #                  <BUNDLE_ID>.game
 #   VERSION_NOTE   added to the version line (Info.plist FAFNativeVersion, deploy.sh's VERSION)
 #   FAF_VULKAN_SDK the Vulkan SDK's macOS folder (default: the one the game was configured with,
-#                  from its build folder's CMakeCache.txt)
+#                  from its build folder's CMakeCache.txt, else the one build_app.sh unpacks)
 #   MACOS_DEPLOYMENT_TARGET  the oldest macOS for the setup window (default 14.0; the game's own
 #                  comes from how it was built)
 # SDL3 and FAudio are taken from wherever the game links them: Homebrew's by path, or those
@@ -47,7 +47,7 @@ SIGN_IDENTITY=${SIGN_IDENTITY:--}
 BUNDLE_ID=${BUNDLE_ID:-local.faf-re-mac}
 TARGET=${MACOS_DEPLOYMENT_TARGET:-14.0}
 SDK=${FAF_VULKAN_SDK:-$(sed -n 's/^FAF_VULKAN_SDK:PATH=//p' "${EXE:h}/CMakeCache.txt" 2>/dev/null)}
-SDK=${SDK:-$HOME/Gaming/.faf/VulkanSDK/1.4.363.0/macOS}
+SDK=${SDK:-$root/macos/vendor/VulkanSDK/$(sed -n 's/^VULKAN_SDK_VERSION=//p' "$root/macos/vendor/versions.sh")/macOS}
 fail() { print -u2 "make_app: $*"; exit 1 }
 # A Mach-O file's load commands and rpaths, one per line (paths may hold spaces).
 loads() { otool -L "$1" | awk '/^\t/ { sub(/^\t/, ""); sub(/ \(compatibility version.*$/, ""); print }' }

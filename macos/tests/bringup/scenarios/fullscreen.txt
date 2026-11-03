@@ -3,7 +3,7 @@
 # into macOS desktop full screen; then Options -> Primary Adapter -> Windowed -> Apply (a
 # captioned window), and back.
 env SIZE=prefs
-template /Users/scottharris/Gaming/.faf/faf-re/build/m4-frontend-tests/template-fullscreen.prefs
+template ../../../../build/m4-frontend-tests/template-fullscreen.prefs
 @120
 shot fullscreen-menu
 click 3008 641           # Options (the menu is pixel-sized: small, top centre)

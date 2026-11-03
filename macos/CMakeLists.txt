@@ -65,9 +65,12 @@ include(deps.cmake)
 # validation layers. The engine compiles against SDL3's headers; only the executables
 # link SDL3, and the Vulkan loader and DXC are loaded at run time.
 find_package(SDL3 CONFIG REQUIRED HINTS /opt/homebrew)
-# Through the ~/Gaming link, so the path has no space (it is baked into the binaries as
-# the development fallback for the loader, the drivers and DXC).
-set(FAF_VULKAN_SDK "$ENV{HOME}/Gaming/VulkanSDK/1.4.363.0/macOS" CACHE PATH
+# Default: the SDK macos/build_app.sh unpacks into macos/vendor (the version in
+# macos/vendor/versions.sh). Its path is baked into the binaries as the development fallback
+# for the loader, the drivers and DXC.
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/vendor/versions.sh" _faf_vulkan_sdk_version REGEX "^VULKAN_SDK_VERSION=")
+string(REPLACE "VULKAN_SDK_VERSION=" "" _faf_vulkan_sdk_version "${_faf_vulkan_sdk_version}")
+set(FAF_VULKAN_SDK "${CMAKE_CURRENT_LIST_DIR}/vendor/VulkanSDK/${_faf_vulkan_sdk_version}/macOS" CACHE PATH
   "LunarG Vulkan SDK, its macOS folder (lib/, include/, share/vulkan/)")
 if(NOT EXISTS "${FAF_VULKAN_SDK}/lib/libvulkan.1.dylib" OR NOT EXISTS "${FAF_VULKAN_SDK}/include/dxc/dxcapi.h")
   message(FATAL_ERROR "No Vulkan SDK at FAF_VULKAN_SDK=${FAF_VULKAN_SDK} (libvulkan.1.dylib, include/dxc).")
@@ -245,7 +248,7 @@ if(_faf_runner_sources)
     Wm3Foundation faf_zlib SDL3::SDL3 ${FAF_MEDIA_LIBRARIES} ${FAF_MACOS_FRAMEWORKS}
     # Wm3System.cpp (bundle paths): FSRef / ProcessSerialNumber APIs.
     "-framework CoreServices" "-framework ApplicationServices")
-  # The build path may contain a space (/Volumes/SSD Programs/...): target_link_options
+  # The build path may contain a space (/Volumes/My Disk/...): target_link_options
   # quotes the argument, a raw -Wl item in target_link_libraries does not.
   target_link_options(faf_replay PRIVATE "LINKER:-map,${CMAKE_CURRENT_BINARY_DIR}/faf_replay.map")
 endif()

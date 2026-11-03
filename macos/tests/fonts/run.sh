@@ -2,13 +2,15 @@
 # Builds and runs the fonts package's tests (notes: macos/porting/fonts.md):
 #   fonts_test   -> build/m2-fonts-tests/out/{metrics.tsv,sheet.png,sheet_zoom.png}, PASS/FAIL
 #   reference.py -> the metrics recomputed from the font files' tables, PASS/FAIL
-# Usage: macos/tests/fonts/run.sh [fonts dir]   (default: the FA install from ~/Gaming/.faf/faf-re-bin/fa_path.lua)
+# Usage: macos/tests/fonts/run.sh [fonts dir]   (default: the FA install named by the run folder's
+# ../fa_path.lua, macos/dev_paths.sh)
 set -e
 here=${0:A:h}
 root=${here:h:h:h}
 fonts=$1
 if [[ -z $fonts ]]; then
-  fa=$(sed -n 's/^fa_path *= *"\(.*\)"/\1/p' ~/Gaming/.faf/faf-re-bin/fa_path.lua)
+  source "$root/macos/dev_paths.sh"
+  fa=$(faf_fa_install)
   fonts="$fa/fonts"
 fi
 out=$root/build/m2-fonts-tests/out

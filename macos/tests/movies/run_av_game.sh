@@ -15,8 +15,9 @@
 # Exit status: the game's (0 normal quit), 124 when TIME ran out.
 set -u
 root=${0:A:h:h:h:h}
-RUN=/Users/scottharris/Gaming/.faf/faf-re-bin/run-native
-SDK=/Users/scottharris/Gaming/.faf/VulkanSDK/1.4.363.0/macOS
+source "$root/macos/dev_paths.sh"
+RUN=$FAF_RUN_DIR
+SDK=$FAF_VULKAN_SDK
 EXE=${FAF_GAME_EXE:-$root/build/m4-movies/faf_game}
 OUT=${OUT:-$root/build/m4-movies-tests/game}
 mkdir -p "$OUT" || { print -u2 "run_av_game: cannot create $OUT"; exit 2 }
@@ -29,7 +30,8 @@ AUDIO=${AUDIO:-disk}
 
 fail() { print -u2 "run_av_game: $*"; exit 2 }
 [[ -x $EXE ]] || fail "no game at $EXE"
-[[ -f $RUN/init_faf.lua ]] || fail "no run folder at $RUN"
+faf_check_run_folder run_av_game
+faf_note_run_folder
 
 INIT=${INIT:-}
 if [[ -z $INIT ]]; then

@@ -40,7 +40,7 @@ FAF_LIBRARIES="avutil swresample swscale avcodec avformat"
 work=$(mktemp -d "${TMPDIR:-/tmp}/ffmpeg-faf-arm64.XXXXXX")
 case "$work" in *[[:blank:]]*) echo "generate.sh: TMPDIR contains whitespace: $work" >&2; exit 1 ;; esac
 # configure refuses out-of-tree builds from a source path with whitespace
-# (/Volumes/SSD Programs/...): give it a link without one.
+# (/Volumes/My Disk/...): give it a link without one.
 ln -s "$SRC" "$work/src"
 mkdir "$work/build"
 

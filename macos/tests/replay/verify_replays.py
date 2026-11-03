@@ -37,10 +37,11 @@ TOOL = os.path.join(HERE, "replay_tool.py")
 WATCHDOG = os.path.join(ROOT, "macos", "tests", "bringup", "watchdog.py")
 RUN_REPLAY = os.path.join(ROOT, "macos", "run_replay.sh")
 HOME = os.path.expanduser("~")
-# What macos/run_replay.sh runs with: the native run folder, whose init.lua mounts ../gamedata.
-RUN_FOLDER = os.path.join(HOME, "Gaming", "faf-re-bin", "run-native")
+# What macos/run_replay.sh runs with: the run folder (macos/dev_paths.sh), whose init.lua mounts
+# ../gamedata.
+RUN_FOLDER = os.path.abspath(os.environ.get("FAF_RUN_DIR") or os.path.join(ROOT, "build", "run", "bin"))
 GAMEDATA = os.path.join(RUN_FOLDER, "..", "gamedata")
-FAF_REPLAYS = os.path.join(HOME, ".faforever", "replays")  # read only: featured-mod lookup
+FAF_REPLAYS = os.path.join(os.environ.get("FAF_CLIENT_DIR") or os.path.join(HOME, ".faforever"), "replays")  # read only
 
 steps = []  # (step, name, status, detail)
 
@@ -166,11 +167,11 @@ def main():
     synccheck_choice = os.environ.get("SYNCCHECK", "")
     replays = sys.argv[1:]
     if not replays:
-        corpus = os.path.join(HOME, "Gaming", "faf", "bench", "corpus")
+        corpus = os.environ.get("FAF_REPLAY_CORPUS", "")
         replays = sorted(os.path.join(corpus, f) for f in os.listdir(corpus) if f.endswith(".scfareplay")) \
-            if os.path.isdir(corpus) else []
+            if corpus and os.path.isdir(corpus) else []
     if not replays:
-        print("verify_replays: no replays given and none in the default corpus", file=sys.stderr)
+        print("verify_replays: no replays given and none in FAF_REPLAY_CORPUS", file=sys.stderr)
         return 2
     if not os.access(exe, os.X_OK):
         print("verify_replays: no runner at %s" % exe, file=sys.stderr)

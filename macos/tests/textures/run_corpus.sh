@@ -1,16 +1,17 @@
 #!/bin/zsh
 # Decodes every texture file the game can load with the POSIX ImageCodec (texture_corpus) and
-# dumps samples to PNG: the FA install's gamedata/*.scd (from ../fa_path.lua next to the native
-# run folder), FAF's gamedata archives, the FA maps and the vault's maps and mods.
+# dumps samples to PNG: the FA install's gamedata/*.scd (from ../fa_path.lua next to the run
+# folder, macos/dev_paths.sh), FAF's gamedata archives, the FA maps and the vault's maps and mods.
 #   macos/tests/textures/run_corpus.sh [dump dir]      (build.sh first)
 # Exit status 0 when no file failed.
 set -u
 root=${0:A:h:h:h:h}
 bin=$root/build/m2-textures-tests
 dump=${1:-$root/build/m2-textures-tests/samples}
-fa=$(sed -n 's/^fa_path = "\(.*\)"$/\1/p' /Users/scottharris/Gaming/.faf/faf-re-bin/fa_path.lua)
-vault=$(sed -n 's/^custom_vault_path = "\(.*\)"$/\1/p' /Users/scottharris/Gaming/.faf/faf-re-bin/fa_path.lua)
-sources=($fa/gamedata/*.scd /Users/scottharris/Gaming/.faf/faf-re-bin/gamedata/*(N) $fa/maps)
+source "$root/macos/dev_paths.sh"
+fa=$(faf_fa_install)
+vault=$(sed -n 's/^custom_vault_path = "\(.*\)"$/\1/p' "${FAF_RUN_DIR:h}/fa_path.lua")
+sources=($fa/gamedata/*.scd ${FAF_RUN_DIR:h}/gamedata/*(N) $fa/maps)
 [[ -n $vault && -d $vault/maps ]] && sources+=($vault/maps)
 [[ -n $vault && -d $vault/mods ]] && sources+=($vault/mods)
 samples=(

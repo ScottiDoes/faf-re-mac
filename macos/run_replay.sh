@@ -1,15 +1,16 @@
 #!/bin/zsh
 # Headless native replay run (milestone 1): plays a FAF replay with build/macos/faf_replay and
 # checks the sim against every checksum the players recorded. It passes the replay benchmark's
-# arguments (~/Gaming/.faf/faf/bench/bench_replay.sh, mode fafre: /init init_bench.lua /nobugreport
-# /log /replay /replayid /benchspeed) plus /nosound /nomovie, from the native run folder
-# /Users/scottharris/Gaming/.faf/faf-re-bin/run-native (FAF's init files; init.lua reads
-# ../fa_path.lua and mounts ../gamedata, both next to that folder).
+# arguments (/init init_bench.lua /nobugreport /log /replay /replayid /benchspeed) plus /nosound
+# /nomovie, from the run folder FAF_RUN_DIR (macos/dev_paths.sh; FAF's init files: init.lua reads
+# ../fa_path.lua and mounts ../gamedata, both next to that folder; macos/make_run_folder.sh
+# makes one). Its gamedata must be the replay's game version.
 #
 # Usage: macos/run_replay.sh [extra faf_replay switches ...]
 # Environment:
-#   REPLAY            replay file (default ~/Gaming/.faf/faf/bench/replay_27890640.scfareplay); a
-#                     relative path is taken from the directory the script is started in
+#   REPLAY            replay file (required); a relative path is taken from the directory the
+#                     script is started in
+#   FAF_RUN_DIR       the run folder (default build/run/bin; macos/dev_paths.sh)
 #   REPLAYID          its id (default: the first run of digits in the file name, else the
 #                     name without its extension)
 #   SPEED             /benchspeed game speed, -10..10 (default 10, the replay slider's maximum)
@@ -18,7 +19,8 @@
 #   LOG               engine log (default $OUT/replay-<id>.log)
 #   FAF_REPLAY_EXE    runner to use (default build/macos/faf_replay)
 #   EXITONGAMEOVER=1  stop at the first game over instead of the end of the replay stream
-#   UI=1              run the game UI Lua too (default: /noui); the benchmark hook then prints
+#   UI=1              run the game UI Lua too (default: /noui); the benchmark hook, when the
+#                     run folder has one (make_run_folder.sh BENCH_MOUNT), then prints
 #                     BENCH lines. Without the UI the runner sets the /benchspeed game speed
 #                     itself and logs its own sim rate. (To watch a replay in a window, use
 #                     macos/run_game.sh.)
@@ -37,9 +39,10 @@
 set -u
 root=${0:A:h:h}
 build=$root/build/macos
-RUN=/Users/scottharris/Gaming/.faf/faf-re-bin/run-native
+source "$root/macos/dev_paths.sh"
+RUN=$FAF_RUN_DIR
 EXE=${FAF_REPLAY_EXE:-$build/faf_replay}
-REPLAY=${REPLAY:-/Users/scottharris/Gaming/.faf/faf/bench/replay_27890640.scfareplay}
+[[ -n ${REPLAY:-} ]] || { print -u2 "run_replay: set REPLAY to the replay file"; exit 2 }
 REPLAY=${REPLAY:A}   # absolute: the run happens in the run folder (WAVE3 F3)
 if [[ -z ${REPLAYID:-} ]]; then
     # The first run of digits in the file name (replay_27890640, 27890640-Player), else the name.
@@ -57,9 +60,8 @@ RESULT=$OUT/replay-$REPLAYID.result
 fail() { print -u2 "run_replay: $*"; exit 2 }
 [[ -x $EXE ]] || fail "no runner at $EXE (ninja -C build/macos faf_replay)"
 [[ -f $REPLAY ]] || fail "no replay at $REPLAY"
-[[ -f $RUN/init_bench.lua ]] || fail "no run folder at $RUN"
-[[ -f $RUN/../fa_path.lua ]] || fail "missing ${RUN:h}/fa_path.lua (copy of ~/.faforever/replaydata/fa_path.lua)"
-[[ -d $RUN/../gamedata ]] || fail "missing ${RUN:h}/gamedata (link to ~/.faforever/replaydata/gamedata)"
+faf_check_run_folder run_replay
+[[ -f $RUN/init_bench.lua ]] || fail "no init_bench.lua in $RUN (macos/make_run_folder.sh writes one)"
 
 args=(/init "$RUN/init_bench.lua" /nobugreport /log "$LOG" /replay "$REPLAY" /replayid "$REPLAYID"
       /benchspeed "$SPEED" /nosound /nomovie /timeout $(( MAXMIN * 60 )))

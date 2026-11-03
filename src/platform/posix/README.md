@@ -75,4 +75,4 @@ macos/tu.sh <path/to/file.cpp>                                       # one TU, n
 ```
 
 `build/macos/compile_commands.json` has every command. Paths may contain spaces
-(`/Volumes/SSD Programs/...`): quote them.
+(`/Volumes/My Disk/...`): quote them.

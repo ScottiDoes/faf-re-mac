@@ -2,7 +2,8 @@
 # test_run_replay.sh: tests macos/run_replay.sh with a stand-in runner (no engine): a relative
 # REPLAY is made absolute before the script enters the run folder (WAVE3 F3), REPLAYID comes
 # from the file name, the result line's recorded/checked/verdict are summarised, and the
-# runner's exit status is passed through. Output in build/m4-lockin-tests/run_replay (OUT).
+# runner's exit status is passed through. Output in build/m4-lockin-tests/run_replay (OUT), with
+# a stand-in run folder there (FAF_RUN_DIR).
 set -u
 root=${0:A:h:h:h:h}
 OUT=${OUT:-$root/build/m4-lockin-tests/run_replay}
@@ -23,6 +24,9 @@ exit ${FAKE_RC:-0}
 EOF
 chmod +x "$fake"
 print -n "fake" > "$OUT/sub dir/replay_12345678.scfareplay"
+export FAF_RUN_DIR=${OUT:A}/run/bin
+mkdir -p "$FAF_RUN_DIR" "${FAF_RUN_DIR:h}/gamedata"
+touch "$FAF_RUN_DIR/init_faf.lua" "$FAF_RUN_DIR/init_bench.lua" "${FAF_RUN_DIR:h}/fa_path.lua"
 
 failures=0
 check() { if eval "$2"; then print "ok    $1"; else print "FAIL  $1"; failures=$((failures + 1)); fi }
@@ -32,7 +36,7 @@ out=$(cd "$OUT" && FAKE_TRACE=$trace FAKE_RC=0 FAF_REPLAY_EXE=$fake OUT=$OUT REP
       zsh "$root/macos/run_replay.sh" /simworkers 8)
 rc=$?
 check "exit status 0 passed through" '(( rc == 0 ))'
-check "runs in the run folder" 'grep -q "^cwd=/Users/scottharris/Gaming/.faf/faf-re-bin/run-native$" $trace'
+check "runs in the run folder" 'grep -qx "cwd=$FAF_RUN_DIR" $trace'
 check "relative REPLAY made absolute" 'grep -qx "replay=${OUT:A}/sub dir/replay_12345678.scfareplay" $trace'
 check "the runner finds the replay" 'grep -qx "exists=1" $trace'
 check "REPLAYID from the file name" 'grep -q "|/replayid|12345678|" $trace'

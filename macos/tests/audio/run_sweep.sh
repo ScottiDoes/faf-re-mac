@@ -12,13 +12,14 @@ SHARDS=${SHARDS:-6}
 TIMESCALE=${TIMESCALE:-0.25}
 CAP_MS=${CAP_MS:-1500}
 LIMIT=${LIMIT:-2400}
-fa=$(sed -n 's/^fa_path *= *[\x27"]\(.*\)[\x27"].*/\1/p' /Users/scottharris/Gaming/.faf/faf-re-bin/fa_path.lua)
+source "$root/macos/dev_paths.sh"
+fa=$(faf_fa_install)
 [[ -d $fa/sounds ]] || { print -u2 "run_sweep: no FA sounds at $fa"; exit 2 }
 exe=$root/build/m4-audio-tests/fact_bank_sweep
 [[ -x $exe ]] || { print -u2 "run_sweep: build it first (macos/tests/audio/build.sh)"; exit 2 }
 mkdir -p "$OUT"
 dirs=("$fa/sounds")
-[[ -d ~/.faforever/sounds ]] && dirs+=(~/.faforever/sounds)
+[[ -d $FAF_CLIENT_DIR/sounds ]] && dirs+=("$FAF_CLIENT_DIR/sounds")
 pids=()
 for ((i = 0; i < SHARDS; i++)); do
     python3 -I "$root/macos/tests/bringup/watchdog.py" $LIMIT "$exe" --xgs "$fa/sounds/SupCom.xgs" \

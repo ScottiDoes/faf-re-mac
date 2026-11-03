@@ -1,9 +1,9 @@
 #!/bin/zsh
-# The game (milestones 2-3): runs build/macos/faf_game from the native run folder
-# /Users/scottharris/Gaming/.faf/faf-re-bin/run-native (FAF's init files; init_faf.lua reads
-# ../fa_path.lua and mounts ../gamedata, both next to that folder), as the FAF client starts
-# the game: /init init_faf.lua /nobugreport, with sound (XACT on FAudio) and movies (FFmpeg),
-# and a log file. Rendering is faf-re's Vulkan renderer on MoltenVK (or
+# The game (milestones 2-3): runs build/macos/faf_game from the run folder FAF_RUN_DIR
+# (macos/dev_paths.sh; FAF's init files: init_faf.lua reads ../fa_path.lua and mounts
+# ../gamedata, both next to that folder; macos/make_run_folder.sh makes one), as the FAF client
+# starts the game: /init init_faf.lua /nobugreport, with sound (XACT on FAudio) and movies
+# (FFmpeg), and a log file. Rendering is faf-re's Vulkan renderer on MoltenVK (or
 # KosmicKrisp) from the LunarG Vulkan SDK; the engine finds the SDK by itself.
 #
 # Usage: macos/run_game.sh [extra faf_game switches ...]
@@ -29,6 +29,7 @@
 #   OUT                folder for the log and captures (default build/macos/game)
 #   LOG                engine log (default $OUT/game.log)
 #   FAF_GAME_EXE       game to run (default build/macos/faf_game)
+#   FAF_RUN_DIR        the run folder (default build/run/bin);  FAF_VULKAN_SDK  the SDK for SHOTS
 #   FAF_VULKAN_DRIVER  moltenvk (default) or kosmickrisp (or a driver manifest .json path)
 #   VALIDATE=1         Vulkan validation (FAF_VULKAN_VALIDATION=1): messages in the log as
 #                      "Vulkan validation: ..."
@@ -42,8 +43,9 @@
 set -u
 root=${0:A:h:h}
 build=$root/build/macos
-RUN=/Users/scottharris/Gaming/.faf/faf-re-bin/run-native
-SDK=/Users/scottharris/Gaming/.faf/VulkanSDK/1.4.363.0/macOS
+source "$root/macos/dev_paths.sh"
+RUN=$FAF_RUN_DIR
+SDK=$FAF_VULKAN_SDK
 EXE=${FAF_GAME_EXE:-$build/faf_game}
 OUT=${OUT:-$build/game}
 mkdir -p "$OUT" || { print -u2 "run_game: cannot create $OUT"; exit 2 }
@@ -55,9 +57,8 @@ SIZE=${SIZE:-prefs}
 
 fail() { print -u2 "run_game: $*"; exit 2 }
 [[ -x $EXE ]] || fail "no game at $EXE (ninja -C build/macos faf_game)"
-[[ -f $RUN/init_faf.lua ]] || fail "no run folder at $RUN"
-[[ -f $RUN/../fa_path.lua ]] || fail "missing ${RUN:h}/fa_path.lua (copy of ~/.faforever/replaydata/fa_path.lua)"
-[[ -d $RUN/../gamedata ]] || fail "missing ${RUN:h}/gamedata (link to ~/.faforever/replaydata/gamedata)"
+faf_check_run_folder run_game
+faf_note_run_folder
 
 INIT=${INIT:-}
 if [[ -z $INIT ]]; then

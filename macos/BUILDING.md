@@ -116,8 +116,9 @@ Without a Developer ID, `AD_HOC=1 macos/release.sh [tag]` makes and publishes th
 
 ## For development
 
-- `macos/app/deploy.sh` builds the development tree (`build/macos`, Homebrew's SDL3 and FAudio), checks it against a recorded replay, and installs the app on this Mac, keeping the previous one for `deploy.sh rollback`.
+- `macos/app/deploy.sh` builds the development tree (`build/macos`, Homebrew's SDL3 and FAudio), checks it against a recorded replay (`REPLAY`), and installs the app into a folder of its own (`DEST`, default `build/deploy`), keeping the previous one for `deploy.sh rollback`.
 - `macos/tests/app/snapshot_setup.sh` draws the setup window offscreen into PNGs for a few situations.
 - `macos/app/icon`: `FAFNative-art.png` is the icon's artwork, made with an image generator; `render_icon.swift` puts it in the macOS icon shape for `make_icon.sh`.
 - `macos/app/dmg/make_dmg.sh` makes the disk image from an app: `background.swift` draws its window's background over `background-art.jpg` (also generated), and `layout.swift` writes the `.DS_Store` that sets the window's size, background and icon positions, without scripting Finder.
-- `macos/run_game.sh` and `macos/run_replay.sh` run the game and the headless replay checker.
+- `macos/run_game.sh` and `macos/run_replay.sh` run the game and the headless replay checker from a run folder laid out like the FAF client's. `macos/make_run_folder.sh` makes one in `build/run` from `~/.faforever`, or from `~/.faforever/replaydata` for replays of the game version the client keeps there.
+- The folders the development scripts use are environment variables with defaults, in `macos/dev_paths.sh`: `FAF_RUN_DIR` (the run folder), `FAF_VULKAN_SDK` and `FAF_CLIENT_DIR`.

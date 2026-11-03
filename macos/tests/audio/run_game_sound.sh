@@ -12,7 +12,10 @@
 # Exit status: the game's, 124 when TIME ran out.
 set -u
 root=${0:A:h:h:h:h}
-RUN=/Users/scottharris/Gaming/.faf/faf-re-bin/run-native
+source "$root/macos/dev_paths.sh"
+faf_check_run_folder run_game_sound
+faf_note_run_folder
+RUN=$FAF_RUN_DIR
 EXE=${FAF_GAME_EXE:-$root/build/m4-audio/faf_game}
 OUT=${OUT:-$root/build/m4-audio-tests/game}
 mkdir -p "$OUT" || exit 2
