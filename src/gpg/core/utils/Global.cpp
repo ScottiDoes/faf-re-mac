@@ -1,5 +1,6 @@
 #include "Global.h"
 #include "gpg/core/profiling/Profiler.h"
+#include "lua/LuaArena.h"
 
 #include <Windows.h>
 
@@ -12,6 +13,9 @@
 #include <cstring>
 #include <cwchar>
 #include <new>
+#if !defined(_WIN32)
+#include <pthread.h>
+#endif
 
 #include "gpg/core/containers/String.h"
 #include "gpg/core/utils/Logging.h"
@@ -25,10 +29,18 @@ namespace
 {
     constexpr std::uint32_t kPageShift = 12u;
     constexpr std::uint32_t kPageSizeBytes = (1u << kPageShift);
+#if defined(_M_X64) || defined(__x86_64__)
     constexpr std::uint32_t kMaxPageIndex = 0xC0000u;
+    constexpr std::uint32_t kPageOwnerMapBytes = 0x3FF000u;
+#else
+    // One owner per 4 KiB page in the x86 address space, including LAA addresses.
+    // The coalescing limit is exclusive: page 0x100000 is beyond 4 GiB.
+    constexpr std::uint32_t kMaxPageIndex = 0x100000u;
+    constexpr std::uint32_t kPageOwnerMapBytes = 0x400000u;
+    static_assert(kPageOwnerMapBytes / 4u == kMaxPageIndex);
+#endif
     constexpr std::uint32_t kSmallBlockClassCount = 44u;
     constexpr std::uint32_t kFreeRegionBucketCount = 256u;
-    constexpr std::uint32_t kPageOwnerMapBytes = 0x3FF000u;
     constexpr std::uint32_t kPrimaryHeapReserveBytes = 0x20000000u;
     constexpr std::uint32_t kThreadCacheSizeBytes = 0x214u;
     constexpr std::uint32_t kHeapRecordSizeBytes = 0x28u;
@@ -305,7 +317,7 @@ namespace
         return node;
     }
 
-#if defined(_M_X64) || defined(FAF_POSIX)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
     // x64 always allocates from a system heap. The engine allocator is the x86
     // binary's: its smallest size classes (4..28 bytes, step 4) cannot hold the
     // 8-byte free-list link a freed block carries, nor give the 16-byte
@@ -344,6 +356,11 @@ namespace
     // every process, which is what FAF_HIGHMEM arranges on Windows.
     [[nodiscard]] bool ImageIsLargeAddressAware() noexcept
     {
+#if !defined(_WIN32)
+        // Engine addition (dedicated-server plan WPL.5): a 64-bit ELF process has the whole
+        // address space.
+        return true;
+#else
         const HMODULE image = ::GetModuleHandleW(nullptr);
         const auto* const dosHeader = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
         // PE header walk: the NT headers sit `e_lfanew` bytes into the image.
@@ -351,10 +368,15 @@ namespace
             reinterpret_cast<const std::uint8_t*>(dosHeader) + dosHeader->e_lfanew
         );
         return (ntHeaders->FileHeader.Characteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) != 0;
+#endif
     }
 
     void ReserveAddressSpaceBelow4Gb() noexcept
     {
+#if INTPTR_MAX != INT32_MAX
+        // Lua's objects live below 4 GB on purpose, so their range goes first.
+        lua::ArenaReserve();
+#endif
         constexpr std::uintptr_t kLowAddressLimit = 0x100000000ull;
         constexpr std::uintptr_t kAllocationGranularity = 0x10000u;
 
@@ -1305,7 +1327,7 @@ namespace
         (void)moduleHandle;
         (void)reserved;
 
-#if defined(_M_X64)
+#if defined(_M_X64) || defined(__x86_64__)
         // Not in the binary: the x64 FAF_HIGHMEM test mode has to run before
         // the CRT allocates anything, and this callback is the first code the
         // loader runs in the image.
@@ -1317,6 +1339,30 @@ namespace
             FlushCurrentThreadHeapCache();
         }
     }
+
+#if !defined(_WIN32)
+    /**
+     * Engine addition (dedicated-server plan WPL.5): an ELF image has no TLS callback
+     * directory. A pthread key whose destructor runs `TlsCallback_1`'s thread-detach path
+     * stands in for it: the key is given a value on each thread that makes a heap cache, so
+     * every such thread flushes it when it exits. As on Windows, a process that exits does
+     * not (key destructors run for exiting threads only).
+     */
+    void FlushThreadHeapCacheAtThreadExit(void*)
+    {
+        TlsCallback_1(nullptr, DLL_THREAD_DETACH, nullptr);
+    }
+
+    void RegisterThreadHeapCacheExit(ThreadHeapCache* const cache)
+    {
+        static const pthread_key_t exitKey = [] {
+            pthread_key_t key{};
+            (void)::pthread_key_create(&key, &FlushThreadHeapCacheAtThreadExit);
+            return key;
+        }();
+        (void)::pthread_setspecific(exitKey, cache);
+    }
+#endif
 
     /**
      * Address: 0x00958400 (FUN_00958400, func_AllocateNewBlock)
@@ -1674,6 +1720,9 @@ namespace
 
         if (request.head != nullptr) {
             gThreadHeapCache = ResetThreadHeapCache(reinterpret_cast<ThreadHeapCache*>(request.head));
+#if !defined(_WIN32)
+            RegisterThreadHeapCacheExit(gThreadHeapCache);
+#endif
             if (hasLock != 0) {
                 ::LeaveCriticalSection(&gAllocatorSentinel);
             }
@@ -1714,7 +1763,7 @@ namespace
  * Registering the real callback fixes both: the reason code is whatever Windows
  * passes, and every thread exit runs it.
  */
-#if !defined(FAF_POSIX) // POSIX: the x64 path's thread_local exit guards do this work
+#if defined(_WIN32)
 #if defined(_M_IX86)
 #pragma comment(linker, "/INCLUDE:__tls_used")
 #pragma comment(linker, "/INCLUDE:_gAllocatorTlsCallbackEntry")
@@ -1725,9 +1774,9 @@ namespace
 #pragma const_seg(".CRT$XLB")
 extern "C" const PIMAGE_TLS_CALLBACK gAllocatorTlsCallbackEntry = &TlsCallback_1;
 #pragma const_seg()
-#endif // !FAF_POSIX
+#endif // _WIN32 (POSIX: RegisterThreadHeapCacheExit)
 
-#if defined(_M_X64)
+#if defined(_M_X64) || defined(__x86_64__)
 void gpg::LogHighMemoryReservation()
 {
     // Plan 7.1: Stage A keeps the image below 4 GB (static addresses still
@@ -1853,7 +1902,7 @@ extern "C" void* __cdecl malloc_crt(size_t size)
  */
 extern "C" void* __cdecl malloc_0(const std::uint32_t size)
 {
-#if defined(_M_X64) || defined(FAF_POSIX)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
     void* block = (size <= small_pool::kMaxPooledBytes && small_pool::Enabled()) ? small_pool::Allocate(size) : nullptr;
     if (block == nullptr) {
         block = SystemHeapAlloc(size); // larger blocks, no pool, or the pool's range is used up
@@ -1964,7 +2013,7 @@ extern "C" void __cdecl free_0(void* ptr)
     }
 #endif
 
-#if defined(_M_X64) || defined(FAF_POSIX)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
     // This has to come before `GetPageOwner`, which is only meaningful for
     // pages the engine allocator owns.
     if (gMemHook != nullptr) {
@@ -2035,7 +2084,7 @@ extern "C" size_t __cdecl msize(void* memblock)
         return 0;
     }
 
-#if defined(_M_X64) || defined(FAF_POSIX)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
     // `realloc_0` sizes its copy from this, so it has to answer for system-heap
     // blocks; `HeapSize` reports `(SIZE_T)-1` for a pointer it does not own.
     if (small_pool::Owns(memblock)) {
@@ -2210,9 +2259,19 @@ void* __cdecl operator new(const std::size_t size)
             return block;
         }
 
+#if defined(_WIN32)
         if (_callnewh(size) == 0) {
             throw std::bad_alloc{};
         }
+#else
+        // Engine addition (dedicated-server plan WPL.5): `_callnewh` is MSVC's; this is
+        // what it does.
+        const std::new_handler handler = std::get_new_handler();
+        if (handler == nullptr) {
+            throw std::bad_alloc{};
+        }
+        handler();
+#endif
     }
 }
 
@@ -2278,7 +2337,7 @@ void gpg::GetHeapInfo(HeapStats* const outStats)
         return;
     }
 
-#if defined(_M_X64) || defined(FAF_POSIX)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
     // On the x64 system heap the engine allocator never starts, and must not
     // be started here just to read its (empty) counters.
     FillSystemHeapStats(*outStats);
@@ -2364,3 +2423,7 @@ void gpg::SetThreadName([[maybe_unused]] const unsigned int id, [[maybe_unused]]
 {
   FAF_PROFILE_SET_THREAD_NAME(name);
 }
+
+#if defined(_WIN32) && !defined(_M_X64) && !defined(__x86_64__)
+#include "../../../../tests/memory/AllocatorBoundsNative.inl"
+#endif

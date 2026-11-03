@@ -1,7 +1,7 @@
 #include "WldSessionInfo.h"
 
-#include <climits>
 #include <cstring>
+#include <limits>
 #include <new>
 
 #include "boost/thread.h"
@@ -161,12 +161,7 @@ namespace moho
 
   SWldScenarioLoadWakeSet::SWldScenarioLoadWakeSet()
     : mWakeEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr))
-#if defined(FAF_POSIX)
-    // LONG_MAX is 2^63-1 with LP64; Windows' LONG_MAX is the 32-bit 0x7FFFFFFF.
-    , mQueueSemaphore(CreateSemaphoreW(nullptr, 0, 0x7FFFFFFF, nullptr))
-#else
-    , mQueueSemaphore(CreateSemaphoreW(nullptr, 0, LONG_MAX, nullptr))
-#endif
+    , mQueueSemaphore(CreateSemaphoreW(nullptr, 0, std::numeric_limits<LONG>::max(), nullptr))
     , mCountersMutex(CreateMutexW(nullptr, FALSE, nullptr))
     , mGoneCount(0)
     , mBlockedCount(0)

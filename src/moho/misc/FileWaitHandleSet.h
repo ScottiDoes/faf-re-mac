@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 
 #include "boost/condition.h"
 #include "boost/mutex.h"
@@ -14,6 +15,7 @@
 #include "legacy/containers/Map.h"
 #include "moho/containers/TDatList.h"
 #include "moho/misc/CVirtualFileSystem.h"
+#include "platform/Interlocked.h"
 
 struct lua_State;
 
@@ -75,7 +77,7 @@ namespace moho
      */
     ~SFileWaitHandle();
 
-    volatile long mLock = 0;       // +0x08
+    volatile platform::InterlockedLong mLock = 0; // +0x08
     CZipFile* mZipFile = nullptr;  // +0x0C
   };
 
@@ -442,6 +444,20 @@ namespace moho
    * set.
    */
   void DISK_InvalidateFileInfoCache(gpg::StrArg sourcePath);
+
+  /**
+   * Engine addition (headless `--disk-trace`, docs/SWITCHES.md): from now on every file the
+   * engine finds, reads or maps and every directory listing is written to `file`, one line
+   * each, to learn which game data a run needs. Null (the default) stops tracing and flushes
+   * the previous file; the caller owns the file.
+   */
+  void DISK_SetAccessTrace(std::FILE* file);
+
+  /** Engine addition: whether `DISK_SetAccessTrace` has a file, so callers skip building lines. */
+  [[nodiscard]] bool DISK_AccessTraceOn();
+
+  /** Engine addition: writes `kind path` to the access trace when one is set. */
+  void DISK_TraceAccess(const char* kind, gpg::StrArg path);
 
   /**
    * Address: 0x00456BE0 (FUN_00456BE0, cfunc_DiskFindFiles)

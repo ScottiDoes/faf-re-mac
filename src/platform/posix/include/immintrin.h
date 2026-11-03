@@ -48,6 +48,14 @@ static inline void _mm_store_si128(__m128i* p, __m128i a) { vst1q_s32(reinterpre
 static inline void _mm_storeu_si128(__m128i* p, __m128i a) { vst1q_s32(reinterpret_cast<std::int32_t*>(p), a); }
 static inline __m128i _mm_setzero_si128() { return vdupq_n_s32(0); }
 static inline __m128d _mm_setzero_pd() { return vdupq_n_f64(0.0); }
+static inline __m128d _mm_set_sd(double a) { return vsetq_lane_f64(a, vdupq_n_f64(0.0), 0); }
+static inline double _mm_cvtsd_f64(__m128d a) { return vgetq_lane_f64(a, 0); }
+// sqrtsd: the correctly rounded square root of b's low lane, a's high lane (fsqrt is IEEE-exact too).
+static inline __m128d _mm_sqrt_sd(__m128d a, __m128d b) { return vsetq_lane_f64(vgetq_lane_f64(vsqrtq_f64(b), 0), a, 0); }
+
+// --- CPUID: no x86 CPU to ask; every leaf reads as zero (the crash report's CPU line).
+static inline void __cpuid(int info[4], int) { info[0] = info[1] = info[2] = info[3] = 0; }
+static inline void __cpuidex(int info[4], int, int) { info[0] = info[1] = info[2] = info[3] = 0; }
 
 // --- MMX (only what platform/MmxOnX64.h forwards) -------------------------------------
 static inline __m64 _mm_setzero_si64() { return vdup_n_s64(0); }

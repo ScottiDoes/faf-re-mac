@@ -14,10 +14,8 @@
 #include <boost/thread/tss.hpp>
 
 #include "moho/terrain/TerrainFactory.h"
-#if !defined(FAF_POSIX)
-// POSIX: the D3D9/D3D10 backends are not built (macos/exclusions.cmake), so no object of
-// these types exists there and the shared_ptr lanes below that dispose them are never run;
-// their forward declarations (BoostWrappers.h) are enough to compile them.
+// Engine addition (dedicated-server plan WPL.5): the Direct3D backends' types exist on Windows only.
+#if defined(_WIN32)
 #include "gpg/gal/backends/d3d9/EffectTechniqueD3D9.hpp"
 #include "gpg/gal/backends/d3d9/EffectVariableD3D9.hpp"
 #include "gpg/gal/backends/d3d10/EffectD3D10.hpp"
@@ -1682,34 +1680,6 @@ namespace boost
 
 
   /**
-   * Address: 0x007FBE60 (FUN_007FBE60, boost::detail::sp_counted_impl_p<Moho::IRenTerrain>::dispose)
-   *
-   * What it does:
-   * Releases one owned `IRenTerrain` pointee through its scalar-deleting
-   * destructor when present.
-   *
-   * The body is `mov ecx,[this+0x0C]; test ecx,ecx; je end; mov eax,[ecx];
-   * mov edx,[eax]; push 1; call edx` -- the pointee's scalar deleting
-   * destructor, vtable slot 0, free flag set. `moho::IRenTerrain` does not
-   * declare that virtual destructor yet (the class carries only static
-   * helpers even though its vftable at 0x00E41994 has fifteen slots), so this
-   * calls `IRenTerrain::DeleteWithFlag` -- the recovered 0x007FF8B0 body for
-   * exactly this operation -- rather than indexing the vtable by hand through
-   * a stand-in struct, which is what it used to do.
-   */
-  void SpCountedImplPDisposeIRenTerrain(
-    SpCountedImplStorage<moho::IRenTerrain>* const countedImpl
-  ) noexcept
-  {
-    if (countedImpl == nullptr || countedImpl->px == nullptr) {
-      return;
-    }
-
-    (void)moho::IRenTerrain::DeleteWithFlag(countedImpl->px, 1u);
-    countedImpl->px = nullptr;
-  }
-
-  /**
    * Address: 0x00765720 (FUN_00765720, boost::detail::sp_counted_impl_p<Moho::PathPreviewFinder>::dispose)
    *
    * What it does:
@@ -1861,23 +1831,8 @@ namespace boost
     countedImpl->px = nullptr;
   }
 
-#if defined(FAF_POSIX)
-  namespace
-  {
-    /**
-     * POSIX: the D3D9/D3D10 backends are not built, so their effect types are incomplete in
-     * this file and no object of them can exist. A live pointee reaching one of their
-     * dispose/unwind lanes is a porting bug: report it and stop, instead of `delete` on an
-     * incomplete type, which would skip the destructor (-Wdelete-incomplete).
-     */
-    [[noreturn]] void AbortOnUnbuiltBackendPointee() noexcept
-    {
-      FAF_POSIX_STUB("shared_ptr lane of an unbuilt D3D9/D3D10 type reached with a live object");
-      std::abort();
-    }
-  } // namespace
-#endif
-
+  // Engine addition (dedicated-server plan WPL.5): the Direct3D backends' types exist on Windows only.
+#if defined(_WIN32)
   /**
    * Address: 0x009418D0 (FUN_009418D0, boost::detail::sp_counted_impl_p<gpg::gal::EffectTechniqueD3D9>::dispose)
    *
@@ -1889,13 +1844,7 @@ namespace boost
     SpCountedImplStorage<gpg::gal::EffectTechniqueD3D9>* const countedImpl
   ) noexcept
   {
-#if defined(FAF_POSIX)
-    if (countedImpl != nullptr && countedImpl->px != nullptr) {
-      AbortOnUnbuiltBackendPointee();
-    }
-#else
     DisposeSpCountedImplPointee(countedImpl);
-#endif
   }
 
   /**
@@ -1909,13 +1858,7 @@ namespace boost
     SpCountedImplStorage<gpg::gal::EffectVariableD3D9>* const countedImpl
   ) noexcept
   {
-#if defined(FAF_POSIX)
-    if (countedImpl != nullptr && countedImpl->px != nullptr) {
-      AbortOnUnbuiltBackendPointee();
-    }
-#else
     DisposeSpCountedImplPointee(countedImpl);
-#endif
   }
 
   /**
@@ -1929,13 +1872,7 @@ namespace boost
     SpCountedImplStorage<gpg::gal::EffectTechniqueD3D10>* const countedImpl
   ) noexcept
   {
-#if defined(FAF_POSIX)
-    if (countedImpl != nullptr && countedImpl->px != nullptr) {
-      AbortOnUnbuiltBackendPointee();
-    }
-#else
     DisposeSpCountedImplPointee(countedImpl);
-#endif
   }
 
   /**
@@ -1949,14 +1886,9 @@ namespace boost
     SpCountedImplStorage<gpg::gal::EffectVariableD3D10>* const countedImpl
   ) noexcept
   {
-#if defined(FAF_POSIX)
-    if (countedImpl != nullptr && countedImpl->px != nullptr) {
-      AbortOnUnbuiltBackendPointee();
-    }
-#else
     DisposeSpCountedImplPointee(countedImpl);
-#endif
   }
+#endif // _WIN32
 
   /**
    * Address: 0x0094E0A0 (FUN_0094E0A0, boost::detail::sp_counted_impl_pd<char*, void (__cdecl*)(void*)>::dispose)
@@ -2180,6 +2112,8 @@ namespace boost
     return SpCountedImplDeletingDtorLane(countedImpl, deleteFlag);
   }
 
+  // Engine addition (dedicated-server plan WPL.5): the Direct3D backends' types exist on Windows only.
+#if defined(_WIN32)
   namespace
   {
     template <class TObject>
@@ -2209,14 +2143,7 @@ namespace boost
     gpg::gal::EffectTechniqueD3D9* const effectTechnique
   ) noexcept
   {
-#if defined(FAF_POSIX)
-    if (effectTechnique != nullptr) {
-      AbortOnUnbuiltBackendPointee();
-    }
-    return 0;
-#else
     return DeletePolymorphicSharedCountCtorPointeeOnUnwind(effectTechnique);
-#endif
   }
 
   /**
@@ -2230,14 +2157,7 @@ namespace boost
     gpg::gal::EffectVariableD3D9* const effectVariable
   ) noexcept
   {
-#if defined(FAF_POSIX)
-    if (effectVariable != nullptr) {
-      AbortOnUnbuiltBackendPointee();
-    }
-    return 0;
-#else
     return DeletePolymorphicSharedCountCtorPointeeOnUnwind(effectVariable);
-#endif
   }
 
   /**
@@ -2299,6 +2219,7 @@ namespace boost
   {
     return SpCountedImplDeletingDtorLane(countedImpl, deleteFlag);
   }
+#endif // _WIN32
 
   /**
    * Address: 0x0094E260 (FUN_0094E260, boost::detail::sp_counted_impl_pd<char*, void (__cdecl*)(void*)>::dtr)
@@ -2460,6 +2381,8 @@ namespace boost
     return SpCountedImplGetDeleterNullResult(requestedType);
   }
 
+  // Engine addition (dedicated-server plan WPL.5): the Direct3D backends' types exist on Windows only.
+#if defined(_WIN32)
   /**
    * Address: 0x00941680 (FUN_00941680, boost::detail::sp_counted_impl_p<gpg::gal::EffectTechniqueD3D9>::get_deleter)
    *
@@ -2485,6 +2408,7 @@ namespace boost
   {
     return SpCountedImplGetDeleterNullResult(requestedType);
   }
+#endif // _WIN32
 
   /**
    * Address: 0x0094E0B0 (FUN_0094E0B0, boost::detail::sp_counted_impl_pd<char*, void (__cdecl*)(void*)>::get_deleter)

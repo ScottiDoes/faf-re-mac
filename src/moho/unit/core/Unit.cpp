@@ -1,6 +1,8 @@
 #include "moho/math/Wm3AxisAlignedBox3FafExtras.h"
+#include "platform/Interlocked.h"
 // Auto-generated from IDA VFTABLE/RTTI scan.
 #include "moho/unit/core/Unit.h"
+#include "gpg/core/profiling/Profiler.h"
 #include "legacy/math/X87Math.h"
 #include "gpg/core/utils/Logging.h"
 #include "moho/ai/CAiNavigatorImpl.h"
@@ -40,6 +42,7 @@
 #include "moho/animation/CAniActor.h"
 #include "moho/animation/CAniPose.h"
 #include "moho/animation/CAniSkel.h"
+#include "moho/animation/PoseJobs.h"
 #include "moho/containers/SCoordsVec2.h"
 #include "moho/entity/EntityCategoryReflection.h"
 #include "moho/collision/CColPrimitiveBase.h"
@@ -1577,7 +1580,7 @@ namespace
       return;
     }
 #if defined(_WIN32) || defined(FAF_POSIX)
-    InterlockedExchangeAdd(reinterpret_cast<volatile long*>(&statItem->mPrimaryValueBits), delta);
+    InterlockedExchangeAdd(reinterpret_cast<volatile platform::InterlockedLong*>(&statItem->mPrimaryValueBits), delta);
 #else
     statItem->mPrimaryValueBits += static_cast<std::int32_t>(delta);
 #endif
@@ -1662,16 +1665,6 @@ namespace
 
     item->SynchronizeAsInt();
     AddIntStatCounter(item, 1L);
-  }
-
-  [[nodiscard]] std::int32_t RoundGridCoordDown(const float value) noexcept
-  {
-    return static_cast<std::int32_t>(std::floor(value));
-  }
-
-  [[nodiscard]] std::int32_t RoundGridCoordUp(const float value) noexcept
-  {
-    return static_cast<std::int32_t>(std::ceil(value));
   }
 
   [[nodiscard]] Wm3::Vector3f& InvalidNavigatorTargetLane() noexcept
@@ -2115,9 +2108,10 @@ namespace
     return COORDS_CanMoveAt(&moveCell, &ogrid, &moveUnit, true, ignoreUnit);
   }
 
+  // 0x006A7827..0x006A784F: `addss 0.5`, stored to float, then the inlined floor.
   [[nodiscard]] std::int32_t RoundOccupyRectEdge(const float value) noexcept
   {
-    return static_cast<std::int32_t>(std::floor(value + 0.5f));
+    return msvc8::FloorToIntX87(value + 0.5f);
   }
 
   void DrawRaisedPlatformEdge(
@@ -6821,7 +6815,7 @@ std::int32_t StorePrimaryStatBitsAtomic(
 ) noexcept
 {
 #if defined(_WIN32) || defined(FAF_POSIX)
-  volatile long* const slot = reinterpret_cast<volatile long*>(&statItem->mPrimaryValueBits);
+  volatile platform::InterlockedLong* const slot = reinterpret_cast<volatile platform::InterlockedLong*>(&statItem->mPrimaryValueBits);
   for (;;) {
     const long observed = InterlockedCompareExchange(slot, 0L, 0L);
     const long exchanged = InterlockedCompareExchange(slot, static_cast<long>(*newValueBits), observed);
@@ -10271,10 +10265,11 @@ int moho::cfunc_UnitCanPathToRectL(LuaPlus::LuaState* const state)
   const Wm3::Vector3f maxCorner = SCR_FromLuaCopy<Wm3::Vector3f>(maxCornerObject);
 
   SAiNavigatorGoal goal{};
-  goal.minX = RoundGridCoordDown(minCorner.x);
-  goal.minZ = RoundGridCoordDown(minCorner.z);
-  goal.maxX = RoundGridCoordUp(maxCorner.x);
-  goal.maxZ = RoundGridCoordUp(maxCorner.z);
+  // 0x006CBEA4..0x006CBF25: the binary's inlined ceil and floor.
+  goal.minX = msvc8::FloorToIntX87(minCorner.x);
+  goal.minZ = msvc8::FloorToIntX87(minCorner.z);
+  goal.maxX = msvc8::CeilToIntX87(maxCorner.x);
+  goal.maxZ = msvc8::CeilToIntX87(maxCorner.z);
 
   Wm3::Vector3f targetPos = InvalidNavigatorTargetLane();
   const bool canPath = unit->AiNavigator->CanPathTo(&targetPos, goal);
@@ -12873,25 +12868,39 @@ int Unit::MotionTick()
 {
   SimulationRef->Logf("0x%08x's motion tick.\n", id_);
 
-  if (AiSiloBuild != nullptr) {
-    AiSiloBuild->SiloTick();
-  }
+  {
+    FAF_PROFILE_ZONE_NAMED("Unit::PreMotion");
+    if (AiSiloBuild != nullptr) {
+      AiSiloBuild->SiloTick();
+    }
 
-  UpdateGuardFormation();
-  UpdateInfoCache();
+    UpdateGuardFormation();
+    UpdateInfoCache();
+  }
 
   if (mUnitVarDat.mStunTicks > 0) {
     --mUnitVarDat.mStunTicks;
   }
 
-  const int motionResult =
-    (UnitMotion != nullptr) ? static_cast<int>(UnitMotion->MotionTick()) : static_cast<int>(TASKSTATUS_Wait);
-
-  for (CEconomyEvent* const economyEvent : mEconomyEventListHead) {
-    economyEvent->ProcessTick();
+  int motionResult = static_cast<int>(TASKSTATUS_Wait);
+  {
+    FAF_PROFILE_ZONE_NAMED("Unit::Motion");
+    if (UnitMotion != nullptr) {
+      motionResult = static_cast<int>(UnitMotion->MotionTick());
+    }
   }
 
-  AniActor->UpdateManipulators(mPendingTransform);
+  {
+    FAF_PROFILE_ZONE_NAMED("Unit::EconomyEvents");
+    for (CEconomyEvent* const economyEvent : mEconomyEventListHead) {
+      economyEvent->ProcessTick();
+    }
+  }
+
+  {
+    FAF_PROFILE_ZONE_NAMED("Unit::Manipulators");
+    POSE_UpdateManipulators(*this); // AniActor->UpdateManipulators(mPendingTransform), or queued (sim_ParallelPose)
+  }
 
   mUnitVarDat.mIsBusy = mAttachInfo.HasAttachTarget();
 
@@ -12912,7 +12921,10 @@ int Unit::MotionTick()
     }
   }
 
-  HandleResourceManagement();
+  {
+    FAF_PROFILE_ZONE_NAMED("Unit::ResourceManagement");
+    HandleResourceManagement();
+  }
 
   if (mIsNotPod && (CommandQueue == nullptr || CommandQueue->mCommandVec.empty())) {
     EntitySetTemplate<Unit> selectedUnits{};
@@ -13034,15 +13046,15 @@ namespace
   /**
    * Floor the two minima and ceil the two maxima of a skirt rectangle onto the
    * occupancy grid, which is what the binary's four `frndint`s plus sign
-   * fixups come out to.
+   * fixups come out to (Unit::Unit, 0x006A618F..0x006A6220).
    */
   [[nodiscard]] gpg::Rect2i SkirtRectToOgridRect(const gpg::Rect2f& skirt) noexcept
   {
     return gpg::Rect2i{
-      static_cast<std::int32_t>(std::floor(skirt.x0)),
-      static_cast<std::int32_t>(std::floor(skirt.z0)),
-      static_cast<std::int32_t>(std::ceil(skirt.x1)),
-      static_cast<std::int32_t>(std::ceil(skirt.z1)),
+      msvc8::FloorToIntX87(skirt.x0),
+      msvc8::FloorToIntX87(skirt.z0),
+      msvc8::CeilToIntX87(skirt.x1),
+      msvc8::CeilToIntX87(skirt.z1),
     };
   }
 } // namespace
@@ -13757,6 +13769,9 @@ Wm3::Vec3f Unit::GetTargetPoint(std::int32_t targetPoint) const
  */
 VTransform Unit::GetBoneWorldTransform(const int boneIndex) const
 {
+  if (boneIndex >= 0) {
+    POSE_WaitFor(AniActor); // engine addition (sim_ParallelPose): this tick's pose first
+  }
   if (AniActor != nullptr && AniActor->mPose.get() != nullptr && boneIndex >= 0) {
     const CAniPose* const pose = AniActor->mPose.get();
     const CAniPoseBone* const bonesBegin = pose->mBones.begin();
@@ -13808,6 +13823,7 @@ VTransform Unit::GetBoneLocalTransform(const int boneIndex) const
   localTransform.pos_.y = 0.0f;
   localTransform.pos_.z = 0.0f;
 
+  POSE_WaitFor(AniActor); // engine addition (sim_ParallelPose): this tick's pose first
   if (AniActor != nullptr && AniActor->mPose.get() != nullptr) {
     const CAniPose* const pose = AniActor->mPose.get();
     const CAniPoseBone* const bonesBegin = pose->mBones.begin();
@@ -15839,10 +15855,11 @@ bool Unit::HasMeleeSpaceAroundLargeTarget(Unit* const target, SOCellPos* const i
   );
   CollisionResult collisionResult{};
 
-  const int minX = RoundGridCoordDown(target->mAABox.Min.x) - static_cast<int>(moverFootprint.mSizeX);
-  const int maxX = RoundGridCoordUp(target->mAABox.Max.x) + 1;
-  const int minZ = RoundGridCoordDown(target->mAABox.Min.z) - static_cast<int>(moverFootprint.mSizeZ);
-  const int maxZ = RoundGridCoordUp(target->mAABox.Max.z) + 1;
+  // 0x0062C558..0x0062C5F0: the binary's inlined floor and ceil.
+  const int minX = msvc8::FloorToIntX87(target->mAABox.Min.x) - static_cast<int>(moverFootprint.mSizeX);
+  const int maxX = msvc8::CeilToIntX87(target->mAABox.Max.x) + 1;
+  const int minZ = msvc8::FloorToIntX87(target->mAABox.Min.z) - static_cast<int>(moverFootprint.mSizeZ);
+  const int maxZ = msvc8::CeilToIntX87(target->mAABox.Max.z) + 1;
   if (minZ > maxZ) {
     return false;
   }
@@ -16832,6 +16849,14 @@ namespace
  */
 void Unit::Sync(SSyncData* const syncData)
 {
+  RefreshSyncBlock();
+  Entity::Sync(syncData);
+}
+
+void Unit::RefreshSyncBlock(
+  boost::shared_ptr<CAniPose>* const releasedPose, boost::shared_ptr<CAniPose>* const releasedPriorPose
+)
+{
   if (NeedSyncGameData) {
     SSTIUnitVariableData& varDat = VarDat();
 
@@ -16906,10 +16931,31 @@ void Unit::Sync(SSyncData* const syncData)
     NeedSyncGameData = false;
   }
 
+  if (!POSE_HoldClientHandles(*AniActor)) {
+    if (VarDat().mSharedPose.get() != nullptr || VarDat().mPriorSharedPose.get() != nullptr) {
+      boost::shared_ptr<CAniPose> none;
+      boost::shared_ptr<CAniPose> nonePrior;
+      if (releasedPose != nullptr) {
+        releasedPose->swap(VarDat().mSharedPose);
+      } else {
+        VarDat().mSharedPose.swap(none);
+      }
+      if (releasedPriorPose != nullptr) {
+        releasedPriorPose->swap(VarDat().mPriorSharedPose);
+      } else {
+        VarDat().mPriorSharedPose.swap(nonePrior);
+      }
+    }
+    return;
+  }
+  if (releasedPose != nullptr) {
+    releasedPose->swap(VarDat().mSharedPose);
+  }
   VarDat().mSharedPose = AniActor->GetPoseShared();
+  if (releasedPriorPose != nullptr) {
+    releasedPriorPose->swap(VarDat().mPriorSharedPose);
+  }
   VarDat().mPriorSharedPose = AniActor->GetPriorPoseShared();
-
-  Entity::Sync(syncData);
 }
 
 /**

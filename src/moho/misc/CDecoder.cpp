@@ -17,6 +17,7 @@
 #include "moho/render/camera/VTransform.h"
 #include "moho/resource/blueprints/RUnitBlueprint.h"
 #include "moho/resource/RResId.h"
+#include "moho/sim/DesyncRecorder.h"
 #include "moho/sim/RRuleGameRules.h"
 #include "moho/sim/SOCellPos.h"
 
@@ -137,6 +138,20 @@ namespace moho
    */
   CDecoder::~CDecoder() = default;
 
+#if FAF_SERVER_MODE
+  namespace
+  {
+    CDecoder::MessageObserver sMessageObserver = nullptr;
+    void* sMessageObserverContext = nullptr;
+  } // namespace
+
+  void CDecoder::SetMessageObserver(const MessageObserver observer, void* const context) noexcept
+  {
+    sMessageObserverContext = context;
+    sMessageObserver = observer;
+  }
+#endif
+
   /**
    * Address: 0x006E40F0 (FUN_006E40F0)
    * Mangled: ?ProcessMessage@CDecoder@Moho@@UAEXABVCMessage@2@PAVCMessageDispatcher@2@@Z
@@ -153,6 +168,11 @@ namespace moho
     if (mStream.get() != nullptr) {
       mStream->Write(message->mBuff.start_, message->mBuff.Size());
     }
+#if FAF_SERVER_MODE
+    if (sMessageObserver != nullptr) {
+      sMessageObserver(*message, sMessageObserverContext);
+    }
+#endif
 
     DecodeMessage(*message);
   }
@@ -182,6 +202,12 @@ namespace moho
     gpg::BinaryReader reader(&stream);
 
     const auto opcode = static_cast<ECmdStreamOp>(static_cast<std::uint8_t>(message.mBuff[0]));
+
+    // Engine addition (issue #216): the desync recorder counts each beat's player commands.
+    if (opcode != ECmdStreamOp::CMDST_Advance && opcode != ECmdStreamOp::CMDST_SetCommandSource
+        && opcode != ECmdStreamOp::CMDST_VerifyChecksum) {
+      CDesyncRecorder::NoteCommandFor(mSink);
+    }
 
     try {
       DecodeOpcode(opcode, reader);

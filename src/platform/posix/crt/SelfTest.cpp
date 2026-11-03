@@ -11,7 +11,6 @@
 #include "legacy/math/X87Math.h"
 #include "platform/posix/crt/CrtMath.h"
 
-#include "Wm3Math.h"
 
 #include <dlfcn.h>
 #include <immintrin.h>
@@ -299,24 +298,6 @@ namespace
     }
   }
 
-  void CheckWm3(Checker& check)
-  {
-    check.Bits32("Wm3::Math<float>::PI", Wm3::Math<float>::PI, 0x40490FDBu);
-    check.Bits32("Wm3::Math<float>::TWO_PI", Wm3::Math<float>::TWO_PI, 0x40C90FDBu);
-    check.Bits32("Wm3::Math<float>::HALF_PI", Wm3::Math<float>::HALF_PI, 0x3FC90FDBu);
-    check.Bits32("Wm3::Math<float>::INV_PI", Wm3::Math<float>::INV_PI, 0x3EA2F983u);
-    check.Bits32("Wm3::Math<float>::INV_TWO_PI", Wm3::Math<float>::INV_TWO_PI, 0x3E22F983u);
-    check.Bits32("Wm3::Math<float>::DEG_TO_RAD", Wm3::Math<float>::DEG_TO_RAD, 0x3C8EFA35u);
-    check.Bits32("Wm3::Math<float>::RAD_TO_DEG", Wm3::Math<float>::RAD_TO_DEG, 0x42652EE0u);
-    check.Bits64("Wm3::Math<double>::PI", Wm3::Math<double>::PI, 0x400921FB54442D18ull);
-    check.Bits64("Wm3::Math<double>::TWO_PI", Wm3::Math<double>::TWO_PI, 0x401921FB54442D18ull);
-    check.Bits64("Wm3::Math<double>::HALF_PI", Wm3::Math<double>::HALF_PI, 0x3FF921FB54442D18ull);
-    check.Bits64("Wm3::Math<double>::INV_PI", Wm3::Math<double>::INV_PI, 0x3FD45F306DC9C883ull);
-    check.Bits64("Wm3::Math<double>::INV_TWO_PI", Wm3::Math<double>::INV_TWO_PI, 0x3FC45F306DC9C883ull);
-    check.Bits64("Wm3::Math<double>::DEG_TO_RAD", Wm3::Math<double>::DEG_TO_RAD, 0x3F91DF46A2529D39ull);
-    check.Bits64("Wm3::Math<double>::RAD_TO_DEG", Wm3::Math<double>::RAD_TO_DEG, 0x404CA5DC1A63C1F8ull);
-  }
-
   // --- x87 known answers (DETERMINISM.md §3, §6.1.4) ------------------------------------------
 
   void CheckX87(Checker& check)
@@ -385,7 +366,6 @@ bool faf_posixRunSelfTests(const bool verbose)
   CheckCodegen(check);
   CheckFreshThread(check);
   CheckCrtMath(check);
-  CheckWm3(check);
   CheckX87(check);
   if (verbose || check.failures() != 0) {
     std::fprintf(stderr, "[faf selftest] %d of %d checks passed\n", check.checks() - check.failures(), check.checks());

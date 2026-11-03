@@ -619,6 +619,21 @@ int gpg::STR_CompareNoCase(
   return _stricmp(lhs, rhs);
 }
 
+bool gpg::STR_FileNameOrderLess(const StrArg lhs, const StrArg rhs) noexcept
+{
+  const auto upper = [](const char c) noexcept {
+    const auto byte = static_cast<unsigned char>(c);
+    return byte >= 'a' && byte <= 'z' ? static_cast<unsigned char>(byte - ('a' - 'A')) : byte;
+  };
+  std::size_t at = 0;
+  for (; upper(lhs[at]) == upper(rhs[at]); ++at) {
+    if (lhs[at] == '\0') {
+      return std::strcmp(lhs, rhs) < 0; // equal apart from case: byte order
+    }
+  }
+  return upper(lhs[at]) < upper(rhs[at]);
+}
+
 bool gpg::STR_ContainsNoCase(
   const StrArg str,
   const StrArg needle
@@ -1248,7 +1263,7 @@ msvc8::string gpg::STR_Printf(
  */
 msvc8::string gpg::STR_Va(
   const char*& fmt,
-  const va_list va
+  va_list va
 )
 {
   // Build through msvc8::string's concatenation path, not append().
@@ -1260,10 +1275,7 @@ msvc8::string gpg::STR_Va(
   // string silently produced an empty result - every Logf/Die/exception
   // message the engine formatted came out blank.
   //
-  // Concatenation is the wrapper's supported route for longer strings: it
-  // stages them in the thread-local arena behind get_concat_buffer and adopts
-  // that storage, which is the same lifetime contract every operator+ already
-  // relies on.
+  // Concatenation is the wrapper's supported route for longer strings.
   // 0x00938E1F / 0x00938E6B call MSVC8's `_vsnprintf`, whose truncation signal
   // is a -1 return; the binary's `while (n == -1)` loop is built on that.
   // `std::vsnprintf` here is the C99/UCRT function, which instead returns the
@@ -1278,15 +1290,23 @@ msvc8::string gpg::STR_Va(
     return written < 0 || static_cast<std::size_t>(written) >= capacity;
   };
 
+  // Each pass formats from its own copy of `va`: a va_list is consumed by the call that reads
+  // it (on System V x64 it is a cursor into the register save area; on Windows a pointer the
+  // callee copies, so there the copy changes nothing).
   char stackBuffer[256]{};
-  int formattedLength = std::vsnprintf(stackBuffer, sizeof(stackBuffer), fmt, va);
+  va_list attempt;
+  va_copy(attempt, va);
+  int formattedLength = std::vsnprintf(stackBuffer, sizeof(stackBuffer), fmt, attempt);
+  va_end(attempt);
   if (didNotFit(formattedLength, sizeof(stackBuffer))) {
     msvc8::vector<char> dynamicBuffer{};
     std::size_t capacity = sizeof(stackBuffer);
     do {
       capacity *= 2;
       dynamicBuffer.resize(capacity, 0);
-      formattedLength = std::vsnprintf(dynamicBuffer.data(), capacity, fmt, va);
+      va_copy(attempt, va);
+      formattedLength = std::vsnprintf(dynamicBuffer.data(), capacity, fmt, attempt);
+      va_end(attempt);
       if (formattedLength < 0) {
         // `_vsnprintf` only ever returned -1 for truncation, so the binary's
         // loop always terminated. The C99 function also returns negative for a

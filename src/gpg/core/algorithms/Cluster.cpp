@@ -1,4 +1,5 @@
 #include "Cluster.h"
+#include "platform/Interlocked.h"
 #include "legacy/math/X87Math.h"
 
 #include <algorithm>
@@ -30,15 +31,10 @@ namespace
     struct SharedCountControl
     {
         void** vtable;
-#if defined(FAF_POSIX)
-        // LP64-10: Windows `long` is 32 bits; the counts sit at +0x08/+0x0C over boost's
-        // 32-bit sp_counted_base counts, with px at +0x10.
-        volatile LONG useCount;
-        volatile LONG weakCount;
-#else
-        volatile long useCount;
-        volatile long weakCount;
-#endif
+        // boost::detail::sp_counted_base's counts: Windows' 32-bit long, a 32-bit int in
+        // boost's gcc/x86 implementation on Linux (platform/Interlocked.h).
+        volatile platform::InterlockedLong useCount;
+        volatile platform::InterlockedLong weakCount;
     };
 
     void RetainSharedCount(void* sharedCount)
@@ -2035,7 +2031,15 @@ float Cluster::QuantizeEdgeCost(const float a, const float b)
     // 0x0092D8B0..0x0092D8C4: `fld a; fdiv b; fldln2; fxch; fyl2x; fmul 6.0f`.
     // The logarithm is never rounded to float on its own.
     const float scaled = msvc8::ScaledLnQuotient(a, b, 6.0f);
-    int quantized = static_cast<int>(std::ceil(scaled));
+    // 0x0092D8C8..0x0092D8E2: ceil as `frndint`, +1 when the value is above its
+    // nearest integer (`cmova`, false when unordered), added to the `fistp`. An
+    // infinite or NaN quotient stores the integer indefinite, which the clamp
+    // below turns into bucket 0; a plain cast of `ceil(+inf)` is undefined, and
+    // clang's x64 code saturated it into bucket 31 (difffuzz, plan WPR.21).
+    const float nearest = std::nearbyint(scaled);
+    int quantized = static_cast<int>(
+        static_cast<std::uint32_t>(msvc8::RoundToInt(nearest)) + (scaled > nearest ? 1u : 0u)
+    );
     if (quantized > 31) {
         quantized = 31;
     }
@@ -2604,12 +2608,12 @@ Cluster ClusterBuild(const SubclusterData& subclusterData)
         for (std::uint32_t low = 0u; low < high; ++low) {
             SubclusterCell key{};
             key.mNode = nodes[low];
-            const auto found = search.Nodes().find(key);
-            if (found == search.Nodes().end()) {
+            const auto* const found = search.Nodes().Find(key);
+            if (found == nullptr) {
                 continue;
             }
             edges[low + ((high * (high - 1u)) >> 1u)].cost =
-                Cluster::Node::CostTo(nodes[low], nodes[high], found->second.mCell.mDistance);
+                Cluster::Node::CostTo(nodes[low], nodes[high], found->mCell.mDistance);
         }
     }
 

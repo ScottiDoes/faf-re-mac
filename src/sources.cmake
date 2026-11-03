@@ -13,6 +13,7 @@ set(FAF_ENGINE_SOURCES
   gpg/core/algorithms/Cluster.cpp
   gpg/core/algorithms/MD5.cpp
   gpg/core/algorithms/SHA256.cpp
+  gpg/core/algorithms/AStarSearch.cpp
   gpg/core/containers/ArchiveSerialization.cpp
   moho/misc/CrtRuntimeExportedHelpers.cpp
   moho/misc/RuntimeTuningGlobals.cpp
@@ -34,6 +35,7 @@ set(FAF_ENGINE_SOURCES
   legacy/containers/Set.cpp
   legacy/containers/String.cpp
   legacy/exceptions/StdExcept.cpp
+  legacy/math/Libm.cpp
   legacy/math/X87Math.cpp
   lua/LuaAssertion.cpp
   gpg/gal/backends/d3d10/D3D10Interfaces.cpp
@@ -131,6 +133,7 @@ set(FAF_ENGINE_SOURCES
   moho/sim/CRandomStreamTypeInfo.cpp
   moho/sim/CRandomStreamSerializer.cpp
   moho/console/CConCommand.cpp
+  moho/console/ClientConCommands.cpp
   moho/console/CVarAccess.cpp
   moho/entity/EntityCategoryLookupResolver.cpp
   moho/misc/StatItem.cpp
@@ -139,7 +142,9 @@ set(FAF_ENGINE_SOURCES
   moho/misc/XDataError.cpp
   moho/misc/XFileError.cpp
   moho/misc/TimeBar.cpp
+  moho/misc/TimeBarRender.cpp
   moho/misc/StartupHelpers.cpp
+  moho/app/StartupClientHelpers.cpp
   moho/misc/StrSafeRuntime.cpp
   moho/misc/IConOutputHandler.cpp
   moho/misc/MiscellaneousExtractor.cpp
@@ -178,6 +183,8 @@ set(FAF_ENGINE_SOURCES
   moho/misc/FileWaitHandleSet.cpp
   moho/net/Common.cpp
   moho/net/NetConVars.cpp
+  moho/net/NetPeerTransport.cpp
+  moho/net/NetlinkPeers.cpp
   moho/net/IClient.cpp
   moho/net/IMessageReceiver.cpp
   moho/net/INetConnection.cpp
@@ -216,12 +223,16 @@ set(FAF_ENGINE_SOURCES
   moho/misc/CountermeasureExtractor.cpp
   moho/particles/CWorldParticles.cpp
   moho/app/WinApp.cpp
+  moho/misc/WinPlatform.cpp
   gpg/core/diagnostics/CrashHooks.cpp
   gpg/core/diagnostics/CrashReport.cpp
+  gpg/core/diagnostics/CrashReportDialog.cpp
   gpg/core/diagnostics/ProbeWatch.cpp
   gpg/core/diagnostics/FrameSampler.cpp
+  gpg/core/diagnostics/BuildInfo.cpp
   lua/LuaCrashDump.cpp
   lua/LuaMemAccounting.cpp
+  lua/LuaArena.cpp
   lua/LuaGcEventLog.cpp
   moho/serialization/PrefetchHandleBase.cpp
   moho/serialization/PrefetchHandleBaseTypeInfo.cpp
@@ -283,6 +294,7 @@ set(FAF_ENGINE_SOURCES
   moho/audio/CSndVarTypeInfo.cpp
   moho/audio/CSndParamsTypeInfo.cpp
   moho/audio/CSndVar.cpp
+  moho/audio/SoundEngineResolve.cpp
   moho/audio/SAudioRequestTypeInfo.cpp
   moho/audio/SAudioRequestSerializer.cpp
   moho/audio/HSoundTypeInfo.cpp
@@ -341,7 +353,12 @@ set(FAF_ENGINE_SOURCES
   moho/resource/blueprints/RUnitBlueprintWeaponVectorReflection.cpp
   moho/script/CUnitScriptTask.cpp
   moho/sim/SimStartupRegistrations.cpp
+  moho/sim/UserStartupRegistrations.cpp
   moho/sim/Sim.cpp
+  moho/sim/UserLuaFunctions.cpp
+  moho/app/WRefEditDialog.cpp
+  moho/sim/UserCommandIssue.cpp
+  moho/render/CDebugCanvasRender.cpp
   moho/sim/SimArmy.cpp
   moho/sim/RRuleGameRulesTypeInfo.cpp
   moho/sim/RRuleGameRules.cpp
@@ -350,6 +367,7 @@ set(FAF_ENGINE_SOURCES
   moho/resource/CAniResourceSkelTypeInfo.cpp
   moho/resource/RScmResourceTypeInfo.cpp
   moho/resource/CParticleTexture.cpp
+  moho/resource/CParticleTextureDevice.cpp
   moho/resource/CParticleTextureReflection.cpp
   moho/resource/ResourceFactory.cpp
   moho/resource/RScmResource.cpp
@@ -378,7 +396,11 @@ set(FAF_ENGINE_SOURCES
   moho/sim/SSTICommandSource.cpp
   moho/sim/IArmyTypeInfo.cpp
   moho/sim/SimDriver.cpp
+  moho/sim/SimDriverNetworkStats.cpp
   moho/sim/SimWorkerPool.cpp
+  moho/sim/DesyncRecorder.cpp
+  moho/sim/DesyncTelemetry.cpp
+  moho/sim/SimJobStream.cpp
   moho/sim/UnitUpdateFill.cpp
   moho/sim/SSyncFilter.cpp
   moho/sim/SSTIArmyConstantData.cpp
@@ -597,12 +619,15 @@ set(FAF_ENGINE_SOURCES
   moho/animation/CSlaveManipulator.cpp
   moho/animation/CStorageManipulator.cpp
   moho/animation/CSlideManipulator.cpp
+  moho/animation/PoseJobs.cpp
   moho/animation/CThrustManipulator.cpp
   moho/sim/CSimConCommand.cpp
   moho/sim/CSimConFunc.cpp
   moho/sim/CSimConVarBase.cpp
   moho/sim/CSimConVarInstanceBase.cpp
   moho/sim/CWldMap.cpp
+  moho/sim/WldTerrainResHeadless.cpp
+  moho/terrain/CWldTerrainRes.cpp
   moho/collision/RDebugCollision.cpp
   moho/collision/RDebugCollisionTypeInfo.cpp
   moho/client/Localization.cpp
@@ -728,8 +753,11 @@ set(FAF_ENGINE_SOURCES
   moho/vision/VisionDB.cpp
   moho/math/Wm3Segment3FafExtras.cpp
   moho/math/Wm3AxisAlignedBox3FafExtras.cpp
+  moho/math/Wm3Queries.cpp
+  moho/math/Wm3FoundationStatics.cpp
   moho/unit/CUnitCommandQueueReflection.cpp
   moho/sim/CCommandLuaFunctionRegistrations.cpp
+  moho/sim/UserCommandLuaFunctions.cpp
   moho/entity/PropTypeInfo.cpp
   moho/entity/PropSerializer.cpp
   moho/sim/SimArmyTypeInfo.cpp
@@ -741,6 +769,7 @@ set(FAF_ENGINE_SOURCES
   moho/sim/STIMap.cpp
   moho/sim/CArmyStatItemTypeInfo.cpp
   moho/sim/CArmyStats.cpp
+  moho/app/SnapshotDirectoryDialog.cpp
   moho/sim/CArmyStatItemSerializer.cpp
   moho/sim/CArmyStatsTypeInfo.cpp
   moho/sim/CInfluenceMapTypeInfo.cpp
@@ -849,8 +878,10 @@ set(FAF_ENGINE_SOURCES
   moho/debug/CPathDebugger.cpp
   moho/net/CGpgNetInterface.cpp
   moho/net/IClientMgrUIInterface.cpp
+  moho/net/CWldUiInterface.cpp
   moho/net/CHostManager.cpp
   moho/net/CLobby.cpp
+  moho/net/LaunchInfoBuilder.cpp
   moho/net/CDiscoveryServiceTypeInfo.cpp
   moho/net/SPeer.cpp
   moho/net/CMessage.cpp
@@ -876,6 +907,7 @@ set(FAF_ENGINE_SOURCES
   moho/render/StrategicIconRenderer.cpp
   moho/render/SelectionBracketGpuRenderer.cpp
   moho/render/WorldShapeGpuRenderer.cpp
+  moho/render/RangeGpuRenderer.cpp
   moho/ui/UiWorldShapes.cpp
   moho/render/ProjectileIconRenderer.cpp
   moho/render/GpuPathSettings.cpp
@@ -900,6 +932,7 @@ set(FAF_ENGINE_SOURCES
   moho/ui/SelectionDragger.cpp
   moho/ui/UiRuntimeTypeUpcastBridges.cpp
   moho/misc/SessionStartup.cpp
+  moho/misc/ReplaySessionSetup.cpp
   moho/misc/CSaveGameRequestImpl.cpp
   moho/script/ScriptedDecalTypeInfo.cpp
   moho/script/ScriptedDecal.cpp
@@ -910,6 +943,7 @@ set(FAF_ENGINE_SOURCES
   moho/net/CClientManagerImpl.cpp
   moho/net/CNullClient.cpp
   moho/net/CReplayClient.cpp
+  moho/net/PeerFeatures.cpp
   moho/serialization/SSavedGameArmyInfoVectorReflection.cpp
   gpg/core/reflection/SerializationError.cpp
   gpg/core/streams/BinaryReader.cpp
@@ -919,6 +953,8 @@ set(FAF_ENGINE_SOURCES
   moho/sim/ISTIDriver.cpp
   moho/sim/ReconBlip.cpp
   moho/sim/CWldSession.cpp
+  moho/sim/WldSessionState.cpp
+  moho/sim/WldScenarioInfo.cpp
   moho/sim/BlueprintLoaderContext.cpp
   moho/sim/CWldSessionLoaderImpl.cpp
   moho/render/CWldTerrainDecalTYPETypeInfo.cpp
@@ -927,6 +963,7 @@ set(FAF_ENGINE_SOURCES
   moho/audio/CSimSoundManager.cpp
   moho/audio/ISoundManager.cpp
   moho/audio/SofdecRuntime.cpp
+  moho/movie/sfd/SfdHeaderInfo.cpp
   moho/app/CScApp.cpp
   moho/app/UserWorkerPool.cpp
   moho/app/CWaitHandleSet.cpp

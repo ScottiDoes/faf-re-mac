@@ -13,16 +13,23 @@ usage: parity.py [<command> [options]]    (see README.md next to this file)
   pause / resume             suspend every running game and stop launching / continue
   stop [--now]               finish the running games and exit / kill them and exit now
   status [-v]                pool, per-build results, running games, desyncs
+  mode [gui|headless]        show or switch what plays the replays (takes effect for new games)
   run                        the runner itself, in the foreground
 
 Data lives in tmp/parity (FAF_PARITY_DATA overrides): parity.sqlite (pool and results),
 results.txt (one line per finished game), desyncs/<build>/, crashes/<build>/, logs/<build>/.
 The runner reads control.json every second, so `instances`, `pause` and `stop` only edit it.
 
-One game: <exe> /init init_parity*.lua /replay <id>.scfareplay ... The init file is generated
+Two modes; each tests its own exe, so their results are separate builds.
+
+Mode "headless" (the default): headless_x64.exe --replay <id>.scfareplay /init init_parity*.lua
+... (docs/SWITCHES.md, "headless"): the simulation alone, flat out, with no window or console;
+its progress and verdict are read from its output.
+
+Mode "gui": <exe> /init init_parity*.lua /replay <id>.scfareplay ... The init file is generated
 next to the exe from its init_faf.lua; it mounts the parity vault (downloaded maps), the
 M28AI version the replay was recorded with, and tools/replay-parity/hook, which runs the sim
-at WLD_GameSpeed 50, parks the camera zoomed in at the map centre and logs a heartbeat.
+with wld_RunWithTheWind 1 at WLD_GameSpeed 50, parks the camera zoomed in at the map centre and logs a heartbeat.
 The game starts minimized (STARTUPINFO show state) and, in window_mode "hidden", loses its
 taskbar button: a minimized window keeps the sim running but skips rendering (CScApp::OnFrame).
 
@@ -32,6 +39,7 @@ before its recorded length), crash, timeout, aborted (stopped by the user; queue
 """
 import argparse
 import ctypes
+import csv
 import ctypes.wintypes as wt
 import datetime
 import hashlib
@@ -52,16 +60,10 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-try:
-    from compression import zstd as _zstd  # Python 3.14+
+from replayfile import (HL_ENDED_RE, HL_LOADED_RE, HL_PROGRESS_RE, HL_SUMMARY_RE, HL_TROUBLE_RE,
+                        HL_VERDICT_RE, MISMATCH_RE, decode_fafreplay, header_summary,
+                        live_client_desync, replay_beats, replay_body_info, replay_checksums)
 
-    def zstd_decompress(blob):
-        return _zstd.decompress(blob)
-except ImportError:  # pragma: no cover - older Pythons with the zstandard package
-    import zstandard as _zstandard
-
-    def zstd_decompress(blob):
-        return _zstandard.ZstdDecompressor().decompressobj().decompress(blob)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -83,12 +85,19 @@ EXTENDED_SET = [26975290, 26953273, 27034831, 26917867, 26876279, 26935800, 2689
                 27004084, 26915859, 26905122]
 
 DEFAULT_CONFIG = {
-    # Built exe to test. The runner snapshots it (copy next to it, named by content hash) and
-    # follows rebuilds: once the file changes and has been stable for a minute, new games use
-    # the new build and the whole pool is queued again for it.
+    # What plays the replays: "headless", the console replay player (headless_x64.exe: the
+    # simulation alone, no window, rendering or audio, flat out), or "gui", the game
+    # (main_x64.exe, hidden as window_mode says), which tests the client as players run it.
+    # `parity.py mode` and the console's `m` key switch it.
+    "mode": "headless",
+    # Built exe to test in each mode. The runner snapshots it (copy next to it, named by content
+    # hash) and follows rebuilds: once the file changes and has been stable for a minute, new
+    # games use the new build and the whole pool is queued again for it.
     "exe": FAF_DIR + "/bin_x64/main_x64.exe",
+    "headless_exe": FAF_DIR + "/bin_x64/headless_x64.exe",
     "follow_exe": True,
     "args": ["/simworkers", "8"],
+    "headless_args": ["/simworkers", "8"],
     "window": [1024, 576],
     # hidden: minimized from the first frame and its taskbar button removed, so nothing shows;
     # minimized: the same with the taskbar button; normal: visible, for watching a game.
@@ -170,7 +179,29 @@ def load_config():
     cfg = read_json(CONFIG_PATH, DEFAULT_CONFIG)
     if not cfg.get("game_version"):
         cfg["game_version"] = int(fa_path_values().get("GameVersion", "3835"))
+    if cfg.get("mode") not in MODES:
+        cfg["mode"] = DEFAULT_CONFIG["mode"]
     return cfg
+
+
+MODES = ("gui", "headless")
+
+
+def mode_exe(cfg):
+    """The exe the configured mode tests."""
+    return cfg["headless_exe"] if cfg["mode"] == "headless" else cfg["exe"]
+
+
+def set_mode(mode):
+    """Write the mode into config.json, keeping the rest of the file as the user left it."""
+    raw = read_json(CONFIG_PATH, {})
+    raw["mode"] = mode
+    write_json(CONFIG_PATH, raw)
+    return mode
+
+
+def mode_of_exe(path):
+    return "headless" if "headless" in os.path.basename(path or "").lower() else "gui"
 
 
 def update_control(**changes):
@@ -215,141 +246,6 @@ def fill_beats(conn):
 
 def pool_path(replay_id, ext):
     return os.path.join(DATA, "pool", "%d.%s" % (replay_id, ext))
-
-# ------------------------------------------------------------------------- replay content
-
-
-def decode_fafreplay(raw):
-    """.fafreplay = one JSON header line, then base64(BE length + zlib) or a raw zstd frame."""
-    import base64
-    import zlib
-    newline = raw.index(b"\n")
-    header = json.loads(raw[:newline])
-    body = raw[newline + 1:]
-    if header.get("compression") == "zstd" or body[:4] == b"\x28\xb5\x2f\xfd":
-        return header, zstd_decompress(body)
-    blob = base64.b64decode(body)
-    data = zlib.decompress(blob[4:])
-    if len(data) != struct.unpack(">I", blob[:4])[0]:
-        raise ValueError("zlib body length mismatch")
-    return header, data
-
-
-def header_summary(header):
-    versions = [v for v in (header.get("featured_mod_versions") or {}).values() if isinstance(v, int)]
-    minutes = None
-    if header.get("game_end") and header.get("launched_at"):
-        minutes = round((header["game_end"] - header["launched_at"]) / 60.0, 1)
-    return {
-        "version": max(versions) if versions else None,
-        "mod": header.get("featured_mod"),
-        "players": header.get("num_players"),
-        "minutes": minutes,
-        "complete": header.get("complete"),
-    }
-
-
-def lua_value(buf, pos):
-    """One value of the engine's Lua serialization (replay header tables)."""
-    kind = buf[pos]
-    pos += 1
-    if kind == 0:
-        return struct.unpack_from("<f", buf, pos)[0], pos + 4
-    if kind == 1:
-        end = buf.index(0, pos)
-        return buf[pos:end].decode("latin1"), end + 1
-    if kind == 2:
-        return None, pos
-    if kind == 3:
-        return buf[pos] != 0, pos + 1
-    if kind == 4:
-        table = {}
-        while buf[pos] != 5:
-            key, pos = lua_value(buf, pos)
-            value, pos = lua_value(buf, pos)
-            table[key] = value
-        return table, pos + 1
-    raise ValueError("unknown Lua value tag %d at %d" % (kind, pos - 1))
-
-
-def replay_stream(data):
-    """Reads the header as VCR_SetupReplaySession does: returns the command source (client)
-    names and the offset where the command stream starts."""
-    def cstring(pos):
-        return data.index(0, pos) + 1
-
-    pos = cstring(cstring(0)) + 13              # engine version, "\r\n", "Replay v1.9\r\n"
-    pos = cstring(cstring(pos))                  # map path, "\r\n\x1a"
-    for _ in range(2):                           # sim mods, scenario info
-        pos += 4 + struct.unpack_from("<i", data, pos)[0]
-    sources = data[pos]
-    pos += 1
-    names = []
-    for _ in range(sources):
-        end = cstring(pos)
-        names.append(data[pos:end - 1].decode("latin1"))
-        pos = end + 4                            # name, timeouts
-    armies = data[pos + 1]                       # after the cheats flag
-    pos += 2
-    for _ in range(armies):
-        pos += 4 + struct.unpack_from("<i", data, pos)[0]
-        pos = data.index(0xFF, pos) + 1          # unit sources, 0xFF-terminated
-    return names, pos + 4                        # random seed
-
-
-def stream_messages(data, pos):
-    """Command stream messages: [type u8][total size u16 LE][payload], as (type, payload)."""
-    while pos + 3 <= len(data):
-        size = data[pos + 1] | data[pos + 2] << 8
-        if size < 3:
-            raise ValueError("bad message size at %d" % pos)
-        yield data[pos], data[pos + 3:pos + size]
-        pos += size
-    if pos != len(data):
-        raise ValueError("command stream ends mid-message")
-
-
-def replay_beats(data):
-    """Game length in beats (10 per game second): the sum of the CMDST_Advance beat counts."""
-    _, pos = replay_stream(data)
-    return sum(struct.unpack_from("<i", body)[0] for kind, body in stream_messages(data, pos) if kind == 0)
-
-
-def replay_checksums(data):
-    """Every checksum the live clients recorded: {beat: {md5 hex: [client names]}}.
-    CMDST_SetCommandSource (1) names the sender, CMDST_VerifyChecksum (3) carries MD5 + beat."""
-    names, pos = replay_stream(data)
-    source = None
-    beats = {}
-    for kind, body in stream_messages(data, pos):
-        if kind == 1:
-            source = body[0]
-        elif kind == 3:
-            beat = struct.unpack_from("<i", body, 16)[0]
-            name = names[source] if source is not None and source < len(names) else str(source)
-            beats.setdefault(beat, {}).setdefault(body[:16].hex(), []).append(name)
-    return beats
-
-
-def replay_body_info(data):
-    """Engine version string, map folder and sim mods of a decoded .scfareplay body."""
-    version = data[:data.index(b"\0")].decode("latin1")
-    m = re.search(rb"Replay v[\d.]+\r\n([^\0]*)\0", data[:8192])
-    if not m:
-        raise ValueError("no replay map line")
-    scmap = m.group(1).decode("latin1")
-    folder = re.match(r"/maps/([^/]+)/", scmap, re.I)
-    pos = m.end()
-    if data[pos:pos + 4] != b"\r\n\x1a\0":
-        raise ValueError("unexpected bytes after the map line")
-    size = struct.unpack_from("<i", data, pos + 4)[0]
-    mods, _ = lua_value(data, pos + 8)
-    if not isinstance(mods, dict):
-        raise ValueError("sim mod table missing (%d bytes)" % size)
-    mod_list = [{"name": str(v.get("name")), "uid": str(v.get("uid")), "version": v.get("version")}
-                for v in mods.values() if isinstance(v, dict)]
-    return {"version": version, "scmap": scmap, "map": folder.group(1).lower() if folder else None,
-            "mods": mod_list}
 
 # --------------------------------------------------------------------------------- network
 
@@ -680,8 +576,34 @@ def cmd_fetch(args):
 u32 = ctypes.WinDLL("user32", use_last_error=True)
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 ntdll = ctypes.WinDLL("ntdll")
-k32.OpenProcess.restype = wt.HANDLE
 EnumProc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+
+def _declare(fn, restype, *argtypes):
+    """Every call's types, so ctypes never guesses an int's width: on x64 a handle, WPARAM,
+    LPARAM or LRESULT is 64 bits (a runner died in _ctypes.pyd, 0xC0000005, on 2026-10-28)."""
+    fn.restype = restype
+    fn.argtypes = argtypes
+
+
+LRESULT = ctypes.c_ssize_t
+_declare(k32.OpenProcess, wt.HANDLE, wt.DWORD, wt.BOOL, wt.DWORD)
+_declare(k32.CloseHandle, wt.BOOL, wt.HANDLE)
+_declare(k32.GetStdHandle, wt.HANDLE, wt.DWORD)
+_declare(k32.GetConsoleMode, wt.BOOL, wt.HANDLE, ctypes.POINTER(wt.DWORD))
+_declare(k32.SetConsoleMode, wt.BOOL, wt.HANDLE, wt.DWORD)
+_declare(k32.GetNumberOfConsoleInputEvents, wt.BOOL, wt.HANDLE, ctypes.POINTER(wt.DWORD))
+_declare(ntdll.NtSuspendProcess, ctypes.c_long, wt.HANDLE)
+_declare(ntdll.NtResumeProcess, ctypes.c_long, wt.HANDLE)
+_declare(u32.EnumWindows, wt.BOOL, EnumProc, wt.LPARAM)
+_declare(u32.EnumChildWindows, wt.BOOL, wt.HWND, EnumProc, wt.LPARAM)
+_declare(u32.GetWindowThreadProcessId, wt.DWORD, wt.HWND, ctypes.POINTER(wt.DWORD))
+_declare(u32.GetClassNameW, ctypes.c_int, wt.HWND, wt.LPWSTR, ctypes.c_int)
+_declare(u32.IsWindowVisible, wt.BOOL, wt.HWND)
+_declare(u32.ShowWindowAsync, wt.BOOL, wt.HWND, ctypes.c_int)
+_declare(u32.PostMessageW, wt.BOOL, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
+_declare(u32.SendMessageTimeoutW, LRESULT, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM, wt.UINT, wt.UINT,
+         ctypes.POINTER(ctypes.c_size_t))
 PROCESS_SUSPEND_RESUME = 0x0800
 SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE = 4, 7
 WM_GETTEXT, WM_GETTEXTLENGTH, BM_CLICK = 0x000D, 0x000E, 0x00F5
@@ -727,12 +649,21 @@ def windows_of(pid):
     return found
 
 
+SMTO_ABORTIFHUNG = 0x0002
+
+
 def window_text(hwnd):
-    n = u32.SendMessageW(hwnd, WM_GETTEXTLENGTH, 0, 0)
+    # With a timeout: a game window that stopped pumping messages must not hang the runner.
+    result = ctypes.c_size_t()
+    if not u32.SendMessageTimeoutW(hwnd, WM_GETTEXTLENGTH, 0, 0, SMTO_ABORTIFHUNG, 1000, ctypes.byref(result)):
+        return ""
+    n = result.value
     if not 0 < n < 8192:
         return ""
     buf = ctypes.create_unicode_buffer(n + 1)
-    u32.SendMessageW(hwnd, WM_GETTEXT, n + 1, buf)
+    if not u32.SendMessageTimeoutW(hwnd, WM_GETTEXT, n + 1, ctypes.addressof(buf), SMTO_ABORTIFHUNG, 1000,
+                                   ctypes.byref(result)):
+        return ""
     return buf.value
 
 
@@ -788,10 +719,22 @@ def kill_pid(pid):
     subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
 
 
+PARITY_EXE_RE = re.compile(r"^.+_parity_[0-9a-f]{10}\.exe$", re.I)
+
+
 def kill_leftover_games():
     """Games a runner that died left behind (only one runner runs at a time, so any snapshot
-    exe still running belongs to none). Another account's games are out of reach and stay."""
-    subprocess.run(["taskkill", "/F", "/IM", "*_parity_*.exe"], capture_output=True)
+    exe still running belongs to none). Another account's games are out of reach and stay.
+    By pid: `taskkill /IM` takes a wildcard only at the end of the name, so the old
+    "*_parity_*.exe" matched nothing and leftovers kept running."""
+    try:
+        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True,
+                             timeout=60).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    for row in csv.reader(out.splitlines()):
+        if len(row) >= 2 and PARITY_EXE_RE.match(row[0]) and row[1].isdigit():
+            kill_pid(int(row[1]))
 
 # ----------------------------------------------------------------------------- the build
 
@@ -866,7 +809,6 @@ def init_file_for(exe_dir, m28_version, cfg):
     return name
 
 
-MISMATCH_RE = re.compile(r"Checksum for beat (\d+) mismatched: ([0-9a-f]{32}) \(sim\) != ([0-9a-f]{32}) \((.*)\)\.")
 HEARTBEAT_RE = re.compile(r"PARITY heartbeat tick=(-?\d+) time=([\d.]+) over=(\w+)")
 # FATAL as the whole upper-case word only: player names land in the log too (26892082's
 # "vvfatalis" matched a case-blind "fatal" and was taken for a crash).
@@ -874,7 +816,14 @@ TROUBLE_RE = re.compile(r"(?-i:\bFATAL\b)|access violation|Assertion failed|Unab
                         r"Failed to setup initial search path|Unhandled exception", re.I)
 
 
+def new_game(row, build, exe, cfg):
+    """A game of the kind the build's exe plays."""
+    return (HeadlessGame if mode_of_exe(exe) == "headless" else Game)(row, build, exe, cfg)
+
+
 class Game:
+    """One replay played by the game (main_x64.exe), minimized or hidden."""
+
     def __init__(self, row, build, exe, cfg):
         self.id = row["id"]
         self.expect = row["minutes"]  # header: the live game's wall time, lobby and pauses included
@@ -890,15 +839,7 @@ class Game:
             os.remove(self.log)
         exe_dir = os.path.dirname(exe)
         init = init_file_for(exe_dir, row["m28"], cfg)
-        w, h = cfg["window"]
-        cmd = [exe, "/init", init, "/nobugreport", "/replay", pool_path(self.id, "scfareplay"),
-               "/replayid", str(self.id), "/nosound", "/nomovie", "/windowed", str(w), str(h),
-               "/log", self.log, "/title", "parity-%d" % self.id, *cfg["args"]]
-        env = dict(os.environ, __COMPAT_LAYER="HighDpiAware")
-        si = subprocess.STARTUPINFO()
-        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # the game's first ShowWindow takes this
-        si.wShowWindow = SW_SHOWNOACTIVATE if cfg["window_mode"] == "normal" else SW_SHOWMINNOACTIVE
-        self.proc = subprocess.Popen(cmd, cwd=exe_dir, env=env, startupinfo=si)
+        self.proc = self.launch(exe, exe_dir, init, cfg)
         self.untabbed = set()
         self.pos = 0
         self.tick = -1
@@ -918,6 +859,36 @@ class Game:
         self.paused_total_at_progress = 0.0
         self.last_progress = time.time()
         self.verdict = None
+
+    def launch(self, exe, exe_dir, init, cfg):
+        w, h = cfg["window"]
+        cmd = [exe, "/init", init, "/nobugreport", "/replay", pool_path(self.id, "scfareplay"),
+               "/replayid", str(self.id), "/nosound", "/nomovie", "/windowed", str(w), str(h),
+               "/log", self.log, "/title", "parity-%d" % self.id, *cfg["args"]]
+        env = dict(os.environ, __COMPAT_LAYER="HighDpiAware")
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # the game's first ShowWindow takes this
+        si.wShowWindow = SW_SHOWNOACTIVATE if cfg["window_mode"] == "normal" else SW_SHOWMINNOACTIVE
+        return subprocess.Popen(cmd, cwd=exe_dir, env=env, startupinfo=si)
+
+    def progress(self, tick):
+        if tick > self.tick:
+            self.tick = tick
+            self.last_progress = time.time()
+            self.paused_total_at_progress = self.paused_total
+
+    def note_mismatch(self, m):
+        """A "Checksum for beat N mismatched" line: ours, or the live game's (see below)."""
+        beat, sim, theirs, client = int(m.group(1)), m.group(2), m.group(3), m.group(4)
+        if client in self.desynced_clients:
+            return  # desynced in the live game earlier; stays wrong for the rest of it
+        if self.live_client_desync(beat, sim, theirs):
+            self.desynced_clients.add(client)
+            self.client_desyncs.append("%s disagreed at beat %d" % (client, beat))
+            return
+        self.mismatches += 1
+        if self.first_beat is None:
+            self.first_beat = beat
 
     def active_seconds_since(self, t):
         paused = self.paused_total + (time.time() - self.suspended_at if self.suspended else 0.0)
@@ -945,26 +916,13 @@ class Game:
         for line in chunk.splitlines():
             m = HEARTBEAT_RE.search(line)
             if m:
-                tick = int(m.group(1))
-                if tick > self.tick:
-                    self.tick = tick
-                    self.last_progress = time.time()
-                    self.paused_total_at_progress = self.paused_total
+                self.progress(int(m.group(1)))
                 self.time = float(m.group(2))
                 self.over = self.over or m.group(3) == "true"
                 continue
             m = MISMATCH_RE.search(line)
             if m:
-                beat, sim, theirs, client = int(m.group(1)), m.group(2), m.group(3), m.group(4)
-                if client in self.desynced_clients:
-                    continue  # desynced in the live game earlier; stays wrong for the rest of it
-                if self.live_client_desync(beat, sim, theirs):
-                    self.desynced_clients.add(client)
-                    self.client_desyncs.append("%s disagreed at beat %d" % (client, beat))
-                    continue
-                self.mismatches += 1
-                if self.first_beat is None:
-                    self.first_beat = beat
+                self.note_mismatch(m)
                 continue
             if "GameEnded" in line:
                 self.ended = True
@@ -980,8 +938,7 @@ class Game:
                 self.recorded = replay_checksums(open(pool_path(self.id, "scfareplay"), "rb").read())
             except (OSError, ValueError, IndexError, struct.error):
                 self.recorded = {}
-        votes = self.recorded.get(beat, {})
-        return len(votes.get(sim, [])) > len(votes.get(theirs, []))
+        return live_client_desync(self.recorded, beat, sim, theirs)
 
     def poll(self):
         """Advance the watch; returns a verdict once the game is over."""
@@ -1059,6 +1016,83 @@ class Game:
                 "game_time": round(self.time), "expect_min": self.expect, "beats": self.beats,
                 "wall_s": round(self.active_seconds_since(self.t0)), "stalled_s": round(self.stalled_seconds())}
 
+
+
+
+class HeadlessGame(Game):
+    """One replay played by headless_x64.exe: no window and no console. It plays the replay
+    flat out and exits; what it prints goes to logs/<build>/<id>.out, the engine log to
+    <id>.log. Mismatch lines are the engine's own ("DESYNC-LINE Checksum for beat N
+    mismatched: ..."), so the live-client vote below works as for the game."""
+
+    def launch(self, exe, exe_dir, init, cfg):
+        self.out = os.path.splitext(self.log)[0] + ".out"
+        self.out_pos = 0
+        self.final = None  # (ended, crash) from the VERDICT line
+        cmd = [exe, "--replay", pool_path(self.id, "scfareplay"), "/init", os.path.join(exe_dir, init),
+               "/nosound", "/log", self.log, "--label", "parity-%d" % self.id,
+               "--timeout", str(int(cfg["max_wall_minutes"]) + 5), *cfg["headless_args"]]
+        with open(self.out, "wb") as out:
+            return subprocess.Popen(cmd, cwd=exe_dir, stdout=out, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+
+    def read_log(self):
+        try:
+            with open(self.out, encoding="latin1", errors="replace") as f:
+                f.seek(self.out_pos)
+                chunk = f.read()
+        except OSError:
+            return
+        # Only whole lines: the process may be writing the last one.
+        cut = chunk.rfind("\n") + 1
+        if self.proc.poll() is None:
+            chunk = chunk[:cut]
+        self.out_pos += len(chunk.encode("latin1", errors="replace"))
+        for line in chunk.splitlines():
+            m = MISMATCH_RE.search(line)
+            if m:
+                self.note_mismatch(m)
+                continue
+            m = HL_PROGRESS_RE.search(line) or HL_ENDED_RE.search(line)
+            if m:
+                self.progress(int(m.group(1)))
+                self.ended = self.ended or "GAME-ENDED" in line
+            elif HL_LOADED_RE.search(line):
+                self.progress(0)
+            elif (m := HL_SUMMARY_RE.search(line)):
+                self.progress(int(m.group(1)))
+                self.over = m.group(2) == "True"
+            elif (m := HL_VERDICT_RE.search(line)):
+                self.final = (m.group(1) == "True", m.group(2) == "True")
+            elif HL_TROUBLE_RE.search(line):
+                self.notes.append(line.strip()[:200])
+            self.time = max(self.tick, 0) / 10.0
+
+    def poll(self):
+        if self.suspended:
+            return None
+        self.read_log()
+        if self.first_beat is not None:
+            return "desync"
+        if self.proc.poll() is not None:
+            self.read_log()
+            if self.first_beat is not None:
+                return "desync"
+            if self.final is None or self.final[1]:
+                self.notes.append("exit code %s%s" % (self.proc.returncode, "" if self.final else ", no verdict"))
+                return "crash"
+            if self.ended or self.over or (self.beats and self.tick >= self.beats - 2):
+                return "pass"
+            self.notes.append("stopped at beat %d of %s" % (self.tick, self.beats or "?"))
+            return "incomplete"
+        wall = self.active_seconds_since(self.t0)
+        if wall > self.cfg["max_wall_minutes"] * 60:
+            return "timeout"
+        if self.tick < 0 and wall > self.cfg["startup_seconds"]:
+            self.notes.append("not loaded after %ds" % wall)
+            return "crash"
+        return None
+
 # ---------------------------------------------------------------------------- the runner
 
 
@@ -1082,7 +1116,9 @@ class Runner:
         self.games = []
         self.build = None
         self.exe = None
+        self.source = None
         self.source_seen = None
+        self.source_missing = None
         self.last_build_check = 0.0
         self.last_launch = 0.0
         self.fetching = None
@@ -1094,26 +1130,33 @@ class Runner:
         log_line("%s %s" % (now(), text), self.echo)
 
     def refresh_build(self, cfg, force=False):
-        if not force and time.time() - self.last_build_check < 60:
+        source = mode_exe(cfg)
+        # A mode switch takes the other exe at once; running games finish on their own build.
+        switched = source != self.source
+        if not force and not switched and time.time() - self.last_build_check < 60:
             return
         self.last_build_check = time.time()
-        source = cfg["exe"]
         try:
             stat = os.stat(source)
         except OSError:
             if force:
                 raise
+            if switched and self.source_missing != source:
+                self.source_missing = source
+                self.say("mode %s: %s not found; staying on build %s" % (cfg["mode"], source, self.build))
             return
-        key = (stat.st_size, stat.st_mtime)
-        if not force and (not cfg["follow_exe"] or key == self.source_seen):
+        key = (source, stat.st_size, stat.st_mtime)
+        if not force and not switched and (not cfg["follow_exe"] or key == self.source_seen):
             return
-        if not force and time.time() - stat.st_mtime < 60:
+        if not force and not switched and time.time() - stat.st_mtime < 60:
             return  # still being written by a build
         build, exe = snapshot_build(self.conn, source)
         self.source_seen = key
+        self.source = source
+        self.source_missing = None
         if build != self.build:
             self.build, self.exe = build, exe
-            self.say("build %s (%s) %s" % (build, exe, git_head()))
+            self.say("build %s (%s, %s) %s" % (build, cfg["mode"], exe, git_head()))
 
     def next_replay(self):
         running = {g.id for g in self.games} | self.launch_skipped
@@ -1170,6 +1213,7 @@ class Runner:
     def write_state(self, ctl):
         write_json(STATE_PATH, {"updated": now(), "updated_ts": time.time(), "pid": os.getpid(),
                                 "running": True, "build": self.build, "exe": self.exe,
+                                "mode": mode_of_exe(self.exe),
                                 "control": ctl, "fetching": bool(self.fetching and self.fetching.is_alive()),
                                 "games": [g.describe() for g in self.games]})
 
@@ -1262,7 +1306,7 @@ class Runner:
             if row is not None:
                 self.idle_reported = False
                 try:
-                    self.games.append(Game(row, self.build, self.exe, cfg))
+                    self.games.append(new_game(row, self.build, self.exe, cfg))
                     self.say("start replay %d (%s, %s players, %s min%s)" % (
                         row["id"], row["map"], row["players"], row["minutes"],
                         ", M28AI v%d" % row["m28"] if row["m28"] else ""))
@@ -1315,6 +1359,8 @@ def cmd_run(args):
 
 def cmd_start(args):
     cmd_init(args)
+    if args.mode:
+        set_mode(args.mode)
     if args.n is not None:
         update_control(instances=args.n)
     update_control(stop=False, stop_now=False)
@@ -1354,15 +1400,32 @@ def cmd_stop(args):
         print("stopping after the running games finish (`stop --now` to kill them)")
 
 
+def cmd_mode(args):
+    cmd_init_quiet()
+    if args.mode:
+        set_mode(args.mode)
+    cfg = load_config()
+    exe = mode_exe(cfg)
+    print("mode %s: %s%s" % (cfg["mode"], exe, "" if os.path.isfile(exe) else " (not found)"))
+    if args.mode and runner_pid():
+        print("the runner takes it for its next games; running games finish as they are")
+
+
+def cmd_init_quiet():
+    if not os.path.isfile(CONFIG_PATH):
+        os.makedirs(DATA, exist_ok=True)
+        write_json(CONFIG_PATH, DEFAULT_CONFIG)
+
+
 def cmd_status(args):
     conn = db()
     fill_beats(conn)
     ctl = read_json(CONTROL_PATH, DEFAULT_CONTROL)
     state = read_json(STATE_PATH, {})
     pid = runner_pid()
-    print("runner: %s | instances %s%s%s" % (
-        "pid %d" % pid if pid else "not running", ctl["instances"], " | PAUSED" if ctl["paused"] else "",
-        " | stopping" if ctl["stop"] else ""))
+    print("runner: %s | mode %s | instances %s%s%s" % (
+        "pid %d" % pid if pid else "not running", load_config()["mode"], ctl["instances"],
+        " | PAUSED" if ctl["paused"] else "", " | stopping" if ctl["stop"] else ""))
     pool = dict(conn.execute("SELECT state, COUNT(*) FROM replays GROUP BY state").fetchall())
     print("pool: %d ready, %d unsupported" % (pool.get("ready", 0), pool.get("unsupported", 0)))
     build = state.get("build")
@@ -1371,7 +1434,8 @@ def cmd_status(args):
             "SELECT verdict, COUNT(DISTINCT replay) FROM runs WHERE build=? GROUP BY verdict", (b["build"],)).fetchall())
         done = conn.execute("SELECT COUNT(DISTINCT replay) FROM runs WHERE build=? AND verdict IN (%s)"
                             % ",".join("?" * len(FINAL_VERDICTS)), (b["build"], *FINAL_VERDICTS)).fetchone()[0]
-        print("build %s%s  %s  [%s]" % (b["build"], " (current)" if b["build"] == build else "", b["git"], b["created"]))
+        print("build %s%s  %s  %s  [%s]" % (b["build"], " (current)" if b["build"] == build else "",
+                                             mode_of_exe(b["source"]), b["git"], b["created"]))
         print("   %d/%d done: %s" % (done, pool.get("ready", 0),
                                      ", ".join("%s %d" % kv for kv in sorted(counts.items())) or "nothing yet"))
         for r in conn.execute("SELECT * FROM runs WHERE build=? AND verdict NOT IN ('pass','aborted') "
@@ -1549,7 +1613,11 @@ def console_screen(conn, mode, message):
     lines.append("%sFAF replay parity%s   %s   runner %s (%s)   %s" % (
         BOLD, RESET, status, pid or "-", mode, time.strftime("%H:%M:%S")))
     b = conn.execute("SELECT * FROM builds WHERE build=?", (build,)).fetchone() if build else None
-    lines.append("build %s%s%s  %s" % (CYAN, build or "-", RESET, b["git"] if b else ""))
+    wanted = load_config()["mode"]
+    playing = state.get("mode") or (mode_of_exe(b["source"]) if b else wanted)
+    mode_text = "%s%s%s" % (BOLD, playing, RESET) + (
+        YELLOW + " -> %s for the next games" % wanted + RESET if pid and wanted != playing else "")
+    lines.append("build %s%s%s  %s   mode %s" % (CYAN, build or "-", RESET, b["git"] if b else "", mode_text))
     ready = conn.execute("SELECT COUNT(*) FROM replays WHERE state='ready'").fetchone()[0]
     counts = dict(conn.execute("SELECT verdict, COUNT(DISTINCT replay) FROM runs WHERE build=? GROUP BY verdict",
                                (build,)).fetchall()) if build else {}
@@ -1610,6 +1678,7 @@ def console_screen(conn, mode, message):
     lines.append("")
     keys = [("+/-", "instances"), ("p", "pause"), ("r", "resume"), ("f", "fetch 10 from vault"),
             ("a", "auto-fetch " + ("on" if ctl["auto_fetch"] else "off")),
+            ("m", "switch to " + ("gui" if wanted == "headless" else "headless")),
             ("s", "stop after running"), ("k", "kill now"), ("q", "quit")]
     lines.append("  ".join("%s[%s]%s %s" % (BOLD, k, RESET, what) for k, what in keys)
                  + (("   " + YELLOW + message + RESET) if message else ""))
@@ -1622,6 +1691,8 @@ def cmd_console(args):
     os.makedirs(DATA, exist_ok=True)
     if not os.path.isfile(CONFIG_PATH):
         cmd_init(args)
+    if args.mode:
+        set_mode(args.mode)
     if args.n is not None:
         update_control(instances=args.n)
     def runner_main():
@@ -1692,6 +1763,11 @@ def cmd_console(args):
             elif key in "aA":
                 on = update_control(auto_fetch=not ctl["auto_fetch"])["auto_fetch"]
                 note("auto-fetch %s" % ("on: 10 more replays whenever the queue runs dry" if on else "off"))
+            elif key in "mM":
+                cfg = load_config()
+                mode = set_mode("gui" if cfg["mode"] == "headless" else "headless")
+                note("mode %s: new games use %s; running ones finish as they are"
+                     % (mode, mode_exe(load_config())))
             elif key in "sS":
                 update_control(stop=not ctl["stop"])
                 note("stopping after the running games" if not ctl["stop"] else "stop cancelled")
@@ -1758,12 +1834,14 @@ def main():
     p.set_defaults(fn=cmd_fetch)
     p = sub.add_parser("start")
     p.add_argument("-n", type=int)
+    p.add_argument("--mode", choices=MODES)
     p.set_defaults(fn=cmd_start)
     p = sub.add_parser("run")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser("console")
     p.add_argument("-n", type=int)
+    p.add_argument("--mode", choices=MODES)
     p.set_defaults(fn=cmd_console)
     p = sub.add_parser("instances")
     p.add_argument("n", type=int)
@@ -1776,6 +1854,9 @@ def main():
     p = sub.add_parser("status")
     p.add_argument("-v", action="store_true")
     p.set_defaults(fn=cmd_status)
+    p = sub.add_parser("mode")
+    p.add_argument("mode", nargs="?", choices=MODES)
+    p.set_defaults(fn=cmd_mode)
     args = ap.parse_args(sys.argv[1:] or ["console"])
     args.fn(args)
 

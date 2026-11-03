@@ -13,9 +13,11 @@
 #include "gpg/core/containers/ArchiveSerialization.h"
 #include "gpg/core/containers/String.h"
 #include "legacy/containers/Vector.h"
+#include "legacy/math/X87Math.h"
 #include "moho/animation/CAniActor.h"
 #include "moho/animation/CAniSkel.h"
 #include "moho/animation/CAnimTexture.h"
+#include "moho/animation/PoseJobs.h"
 #include "moho/lua/CScrLuaBinder.h"
 #include "moho/lua/CScrLuaInitForm.h"
 #include "moho/misc/WeakPtr.h"
@@ -171,6 +173,7 @@ namespace
     lua_pushstring(rawState, message);
     (void)lua_gettop(rawState);
     lua_error(rawState);
+    std::abort();
   }
 
   /**
@@ -1300,8 +1303,10 @@ namespace moho
     float rate = mRate;
     if (mDirectionalAnim) {
       Unit* const unit = mGoal.GetObjectPtr();
-      const Wm3::Quatf& q = unit->GetTransform().orient_;
-      const Wm3::Vec3f velocity = unit->GetVelocity();
+      // Engine addition (sim_ParallelPose): inside a queued pose job, the inputs copied at queue time.
+      const SPoseJobInputs* const jobInputs = POSE_JobInputsFor(unit);
+      const Wm3::Quatf& q = jobInputs != nullptr ? jobInputs->mTransformOrient : unit->GetTransform().orient_;
+      const Wm3::Vec3f velocity = jobInputs != nullptr ? jobInputs->mVelocity : unit->GetVelocity();
       const float forwardX = 2.0f * (q.x * q.z + q.w * q.y);
       const float forwardY = 2.0f * (q.y * q.z - q.w * q.x);
       const float forwardZ = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
@@ -1319,11 +1324,14 @@ namespace moho
       if (unit == nullptr) {
         mAnimationTime += rate * 0.1f;
       } else {
-        const Wm3::Vec3f velocity = unit->GetVelocity();
+        // Engine addition (sim_ParallelPose): inside a queued pose job, the inputs copied at queue time.
+        const SPoseJobInputs* const jobInputs = POSE_JobInputsFor(unit);
+        const Wm3::Vec3f velocity = jobInputs != nullptr ? jobInputs->mVelocity : unit->GetVelocity();
         const float speed = std::sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
         const float speedFraction = speed / unit->GetBlueprint()->Physics.MaxSpeed;
-        const Wm3::Quatf& orientation = unit->mVarDat.mCurTransform.orient_;
-        const Wm3::Quatf& prevOrientation = unit->mVarDat.mLastTransform.orient_;
+        const Wm3::Quatf& orientation = jobInputs != nullptr ? jobInputs->mCurOrient : unit->mVarDat.mCurTransform.orient_;
+        const Wm3::Quatf& prevOrientation =
+          jobInputs != nullptr ? jobInputs->mLastOrient : unit->mVarDat.mLastTransform.orient_;
         // 0x0063FFDE: `0x004F0B40` is a 16-byte memcmp, so this is bitwise
         // inequality (a -0/+0 lane flip counts as turning), which is exactly
         // Wm3 `Quaternion::operator==`.
@@ -1874,3 +1882,29 @@ namespace
   // Address: 0x010B291C -- process-global `CAnimationManipulatorSerializer` singleton.
   moho::CAnimationManipulatorSerializer gCAnimationManipulatorSerializer;
 } // namespace
+
+namespace moho
+{
+  /**
+   * Address: 0x00422940 (FUN_00422940)
+   *
+   * What it does:
+   * Computes `value mod range` with the same positive-wrap behavior used by
+   * animation frame sampling paths.
+   *
+   * 0x00422949..0x0042294F: `fld value; fld range; call _CIfmod` -- the MSVC8
+   * CRT, which returns +0 for a zero dividend. 0x00422958..0x00422987 shifts by
+   * `range` when `0 > r` and `0 > range` disagree (both ordered compares). No
+   * zero-range guard: the callers test the range first (0x0063FAB7, 0x0064005D,
+   * and a non-empty frame list in GetFrameAt).
+   */
+  float WrapPositiveModulo(const float value, const float range) noexcept
+  {
+    float wrapped = static_cast<float>(msvc8::fmod(value, range));
+    if ((0.0f > wrapped) != (0.0f > range)) {
+      wrapped += range;
+    }
+    return wrapped;
+  }
+
+} // namespace moho

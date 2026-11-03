@@ -1,4 +1,4 @@
-// The 27 msvc8_x87_* routines legacy/math/X87Math.cpp calls on 64-bit targets, on the
+// The 30 msvc8_x87_* routines legacy/math/X87Math.cpp calls on 64-bit targets, on the
 // software x87 of X87Core.h (macos/docs/DETERMINISM.md §3). Windows x64 runs the same
 // instruction sequences on the real x87 unit (legacy/math/X87Math64.asm); the sim must get
 // the same bits here.
@@ -42,6 +42,7 @@ namespace faf_posix::x87::emu
       // Loads: exact.
       void fld_m32(const float value) noexcept { Push(FromFloat(value)); }
       void fld_m64(const double value) noexcept { Push(FromDouble(value)); }
+      void fild_m32(const std::int32_t value) noexcept { Push(FromDouble(static_cast<double>(value))); }
       void fld_st(const int i) noexcept { Push(St(i)); }
       void fld1() noexcept { Push(kOne); }
       void fldl2e() noexcept { Push(kL2E); }
@@ -232,6 +233,53 @@ namespace faf_posix::x87::emu
       return fpu.fstp_m32();         // fstp dword ptr [rsp+8]; fldcw (restore)
     }
 
+    float SubtractBilinearHeight(
+      const float top, const float h00, const float h01, const float h10, const float h11, const float fracX,
+      const float fracZ
+    ) noexcept
+    {
+      // top, h00..h10 spilled to [rsp+8..20]; h11 at [rsp+40], fracX at [rsp+48], fracZ at [rsp+56].
+      X87Stack fpu(Precision::P24);  // fnstcw; and eax, 0fffffcffh; fldcw
+      fpu.fld_m32(h01);              // fld dword ptr [rsp+16]
+      fpu.fld_m32(h00);              // fld dword ptr [rsp+12]
+      fpu.fsub(1, 0);                // fsub st(1), st(0)
+      fpu.fld_m32(fracZ);            // fld dword ptr [rsp+56]
+      fpu.fmul(2, 0);                // fmul st(2), st(0)
+      fpu.fxch(2);                   // fxch st(2)
+      fpu.faddp(1);                  // faddp st(1), st(0)
+      fpu.fld_m32(h11);              // fld dword ptr [rsp+40]
+      fpu.fld_m32(h10);              // fld dword ptr [rsp+20]
+      fpu.fsub(1, 0);                // fsub st(1), st(0)
+      fpu.fxch(1);                   // fxch st(1)
+      fpu.fmulp(3);                  // fmulp st(3), st(0)
+      fpu.faddp(2);                  // faddp st(2), st(0)
+      fpu.fsub(1, 0);                // fsub st(1), st(0)
+      fpu.fxch(1);                   // fxch st(1)
+      fpu.fmul_m32(fracX);           // fmul dword ptr [rsp+48]
+      fpu.faddp(1);                  // faddp st(1), st(0)
+      fpu.fsubr_m32(top);            // fsubr dword ptr [rsp+8]
+      return fpu.fstp_m32();         // fstp dword ptr [rsp+8]; fldcw (restore)
+    }
+
+    float TwisterWordInRange(const float lower, const float upper, const std::uint32_t word) noexcept
+    {
+      // lower, upper at [rsp+8], [rsp+12]; the word at [rsp+16]; 2^32 at [rsp+20], 2^-32 at [rsp+28].
+      X87Stack fpu(Precision::P24);                   // fnstcw; and eax, 0fffffcffh; fldcw
+      const std::int32_t signedWord = static_cast<std::int32_t>(word);
+      fpu.fild_m32(signedWord);                       // fild dword ptr [rsp+16]
+      if (signedWord < 0) {                           // test r8d, r8d; jge @F
+        fpu.fadd_m32(4294967296.0f);                  // fadd dword ptr [rsp+20]
+      }
+      fpu.fld_m32(upper);                             // fld dword ptr [rsp+12]
+      fpu.fld_m32(lower);                             // fld dword ptr [rsp+8]
+      fpu.fsub(1, 0);                                 // fsub st(1), st(0)
+      fpu.fxch(2);                                    // fxch st(2)
+      fpu.fmulp(1);                                   // fmulp st(1), st(0)
+      fpu.fmul_m32(2.3283064365386962890625e-10f);   // fmul dword ptr [rsp+28]
+      fpu.faddp(1);                                   // faddp st(1), st(0)
+      return fpu.fstp_m32();                          // fstp dword ptr [rsp+8]; fldcw (restore)
+    }
+
     // msvc8_x87_sinf / cosf (no fldcw).
     float Sinf(const float x) noexcept
     {
@@ -350,6 +398,16 @@ namespace faf_posix::x87::emu
       fpu.fld_m32(sinArg);           // fld dword ptr [rsp+8]
       fpu.fsin();                    // fsin
       fpu.fmulp(1);                  // fmulp st(1), st(0)
+      return fpu.fstp_m32();         // fstp dword ptr [rsp+8]; fldcw (restore)
+    }
+
+    float SinOfProductTimes(const float a, const float b, const float factor) noexcept
+    {
+      X87Stack fpu(Precision::P24);  // fnstcw; and eax, 0fffffcffh; fldcw
+      fpu.fld_m32(a);                // fld dword ptr [rsp+8]
+      fpu.fmul_m32(b);               // fmul dword ptr [rsp+12]
+      fpu.fsin();                    // fsin
+      fpu.fmul_m32(factor);          // fmul dword ptr [rsp+16]
       return fpu.fstp_m32();         // fstp dword ptr [rsp+8]; fldcw (restore)
     }
 
@@ -919,6 +977,24 @@ extern "C" float msvc8_x87_bilinear_height(
 )
 {
   return emu::fast::BilinearHeight(h00, h01, h10, h11, fracX, fracZ);
+}
+
+extern "C" float msvc8_x87_subtract_bilinear_height(
+  const float top, const float h00, const float h01, const float h10, const float h11, const float fracX,
+  const float fracZ
+)
+{
+  return emu::ref::SubtractBilinearHeight(top, h00, h01, h10, h11, fracX, fracZ);
+}
+
+extern "C" float msvc8_x87_sin_of_product_times(const float a, const float b, const float factor)
+{
+  return emu::ref::SinOfProductTimes(a, b, factor);
+}
+
+extern "C" float msvc8_x87_twister_word_in_range(const float lower, const float upper, const std::uint32_t word)
+{
+  return emu::ref::TwisterWordInRange(lower, upper, word);
 }
 
 extern "C" std::int32_t msvc8_x87_round_to_int(const float value)

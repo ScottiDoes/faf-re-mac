@@ -132,6 +132,10 @@ file(GLOB_RECURSE _faf_posix_sources CONFIGURE_DEPENDS "${FAF_SRC}/platform/posi
 # The headless runner's and the game's own files build into faf_replay and faf_game,
 # below; the DXC bridge builds without the Win32 stand-ins (macos/dxc.cmake).
 list(FILTER _faf_posix_sources EXCLUDE REGEX "/platform/posix/(runner|game|dxc)/")
+# Upstream's Linux server layer (cmake/FafLinux.cmake), also in src/platform/posix: its own
+# Win32 shim, x86 floating-point environment and client type_info stand-ins. This build has
+# its own (WinCompat.h) and compiles the client classes themselves.
+list(FILTER _faf_posix_sources EXCLUDE REGEX "/platform/posix/(Win32Shim|FpEnvPosix|ClientTypeInfoPosix)\\.cpp$")
 # Runs the GPG_PREREGISTER_INIT providers; must be the first object linked (see the file).
 set(_faf_first_source "${FAF_SRC}/platform/posix/startup/StaticInitPreRegister.cpp")
 list(REMOVE_ITEM _faf_posix_sources "${_faf_first_source}")
@@ -168,6 +172,14 @@ target_compile_definitions(faf_engine PUBLIC "FAF_VULKAN_SDK_DIR=\"${FAF_VULKAN_
 # The native build's own engine Lua (macos/fafengine-macos), when the run folder has no copy.
 target_compile_definitions(faf_engine PUBLIC "FAF_MACOS_LUA_DIR=\"${CMAKE_CURRENT_LIST_DIR}/fafengine-macos\"")
 target_link_libraries(faf_engine PUBLIC faf_codegen Wm3Foundation faf_zlib)
+# The git commit compiled into the engine (gpg/core/diagnostics/BuildInfo.cpp) and the switch
+# names of docs/SWITCHES.md (moho/sim/DesyncRecorder.cpp), from upstream's generator, which
+# reads both relative to PROJECT_SOURCE_DIR: the repository, not this folder.
+include("${FAF_ROOT}/cmake/FafBuildInfo.cmake")
+block()
+  set(PROJECT_SOURCE_DIR "${FAF_ROOT}")
+  faf_build_info(faf_engine arm64-macos)
+endblock()
 target_compile_options(faf_engine PUBLIC
   # Every translation unit sees the Win32 stand-ins, as every Windows TU sees
   # <windows.h> through platform/Platform.h.

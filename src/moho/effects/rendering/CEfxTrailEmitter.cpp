@@ -1,4 +1,5 @@
 #include "moho/effects/rendering/CEfxTrailEmitter.h"
+#include "platform/Interlocked.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include "gpg/core/reflection/Reflection.h"
 #include "moho/ai/CAiReconDBImpl.h"
 #include "moho/effects/rendering/CEfxEmitter.h"
+#include "moho/effects/rendering/CEffectManagerImpl.h"
 #include "moho/effects/rendering/IEffectManager.h"
 #include "moho/entity/Entity.h"
 #include "moho/render/ETrailParam.h"
@@ -525,17 +527,19 @@ namespace moho
    */
   void CEfxTrailEmitter::OnTick()
   {
+    if (EFFECT_LifetimeOnly()) {
+      if (!ProcessLifetime()) {
+        ++mTrailLength; // what `CalculateVisible` does for a trail no camera sees
+      }
+      return;
+    }
     if (ProcessLifetime() || !CalculateVisible()) {
       return;
     }
 
-    if (sEngineStatRenderActiveEmitters == nullptr) {
-      EngineStats* const engineStats = GetEngineStats();
-      sEngineStatRenderActiveEmitters = engineStats->GetItem("Render_ActiveEmitters", true);
-      (void)sEngineStatRenderActiveEmitters->Release(0);
-    }
+    PrepareTickStats();
     _InterlockedExchangeAdd(
-      reinterpret_cast<volatile long*>(&sEngineStatRenderActiveEmitters->mPrimaryValueBits), 1);
+      reinterpret_cast<volatile platform::InterlockedLong*>(&sEngineStatRenderActiveEmitters->mPrimaryValueBits), 1);
 
     const std::int32_t pendingTicks = mTrailLength;
     const RTrailBlueprint* const bp = mTrailBlueprint;
@@ -561,6 +565,15 @@ namespace moho
     mTrailLength = 0;
     Tick(0);
     mTotalTicks = mTotalTicks + 1.0f;
+  }
+
+  void CEfxTrailEmitter::PrepareTickStats()
+  {
+    if (sEngineStatRenderActiveEmitters == nullptr) {
+      EngineStats* const engineStats = GetEngineStats();
+      sEngineStatRenderActiveEmitters = engineStats->GetItem("Render_ActiveEmitters", true);
+      (void)sEngineStatRenderActiveEmitters->Release(0);
+    }
   }
 } // namespace moho
 

@@ -296,7 +296,7 @@ namespace
      * What it does:
      * Reads one 64-bit primitive lane used by this archive vtable slot.
      */
-    void ReadUInt64(unsigned __int64* const value) override
+    void ReadUInt64(std::uint64_t* const value) override
     {
       ReadUInt642(value);
     }
@@ -320,14 +320,12 @@ namespace
      */
     void ReadULong(unsigned long* const value) override
     {
-#if defined(FAF_POSIX)
-      // LP64 (README rule 2): the archive's long lane is 4 bytes; widen it into the 64-bit long.
-      std::uint32_t lane = 0;
-      ReadULong2(&lane);
-      *value = lane;
-#else
-      ReadULong2(value);
-#endif
+      // The archive's long is 32 bits (the 2007 x86 format). Read it as such and widen, so an
+      // LP64 `unsigned long` (Linux) gets all of its bytes set (plan WPL.6, C3); on Windows the
+      // two types are the same.
+      std::uint32_t stored = 0;
+      ReadULong2(&stored);
+      *value = static_cast<unsigned long>(stored);
     }
 
     /**
@@ -338,14 +336,10 @@ namespace
      */
     void ReadLong(long* const value) override
     {
-#if defined(FAF_POSIX)
-      // LP64 (README rule 2): the archive's long lane is 4 bytes; sign-extend it.
-      std::int32_t lane = 0;
-      ReadLong2(&lane);
-      *value = lane;
-#else
-      ReadLong2(value);
-#endif
+      // 32 bits in the archive, sign-extended into an LP64 `long` (see ReadULong).
+      std::int32_t stored = 0;
+      ReadLong2(&stored);
+      *value = static_cast<long>(stored);
     }
 
     /**
@@ -689,7 +683,7 @@ namespace
      * What it does:
      * Extracts one unsigned 64-bit token from the text stream lane.
      */
-    void ReadUInt64(unsigned __int64* const value) override
+    void ReadUInt64(std::uint64_t* const value) override
     {
       (*mCachedStream) >> *value;
     }

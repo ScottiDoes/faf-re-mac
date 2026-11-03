@@ -7,6 +7,7 @@
 #include "gpg/gal/PipelineDiskCache.h"
 #include "gpg/gal/PlacedResources.h"
 #include "gpg/gal/backends/common/ImageCodec.h"
+#include "gpg/gal/backends/d3d11/EffectSourceD3D11.h"
 #include "gpg/gal/effects/EffectRuntime.h"
 #include "moho/console/CConCommand.h"
 
@@ -43,6 +44,15 @@ namespace moho
       &gpg::gal::imaging::gDdsDirectLoad
     );
 
+    /** Engine addition: `ren_EffectFastScan` (see gpg/gal/backends/d3d11/EffectSourceD3D11.h). */
+    TConVar<bool> gTConVar_ren_EffectFastScan(
+      "ren_EffectFastScan",
+      "Read effect source with plain scans (1, the default) or with the std::regex searches they replaced (0), which "
+      "took about half of the time from process start to the lobby; same result. /fxregex turns it off at startup. "
+      "Read when an effect is created.",
+      &gpg::gal::d3d11::gEffectFastScan
+    );
+
     /** Engine addition: `ren_BackgroundShaders` (see EffectProgram::PrepareInBackground). */
     TConVar<bool> gTConVar_ren_BackgroundShaders(
       "ren_BackgroundShaders",
@@ -69,6 +79,7 @@ namespace moho
   extern int ren_ParticleBatch;
   extern int ren_GpuProjectileIcons;
   extern int ren_GpuShapes;
+  extern int ren_GpuRanges;
 
   namespace
   {
@@ -90,6 +101,7 @@ namespace moho
       {"ren_GpuProjectileIcons", &ren_GpuProjectileIcons, gpg::gal::kGpuPathProjectileIcons,
        gpg::gal::kGpuFeatureVertexPulling},
       {"ren_GpuShapes", &ren_GpuShapes, gpg::gal::kGpuPathWorldShapes, gpg::gal::kGpuFeatureVertexPulling},
+      {"ren_GpuRanges", &ren_GpuRanges, gpg::gal::kGpuPathRanges, gpg::gal::kGpuFeatureVertexPulling},
     };
   } // namespace
 

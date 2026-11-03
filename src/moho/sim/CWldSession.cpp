@@ -1,3 +1,4 @@
+#include "moho/sim/WldSessionState.h"
 #include "CWldSession.h"
 
 #if defined(FAF_POSIX)
@@ -87,6 +88,7 @@
 #include "moho/misc/StatItem.h"
 #include "moho/misc/Stats.h"
 #include "moho/net/CGpgNetInterface.h"
+#include "moho/sim/DesyncRecorder.h"
 #include "moho/sim/SDesyncInfo.h"
 #include "moho/misc/TimeBar.h"
 #include "moho/particles/CWorldParticles.h"
@@ -129,6 +131,10 @@
 #include "gpg/core/reflection/StaticInitPhase.h"
 #include "gpg/core/diagnostics/CrashReport.h"
 #include "moho/sim/Sim.h"
+#if FAF_SERVER_MODE
+#include "remote/client/RemoteSimDriver.h"
+#include "remote/client/SessionSummary.h"
+#endif
 
 namespace
 {
@@ -2045,7 +2051,7 @@ namespace moho
       return gStrategicIconAuxiliary;
     }
 
-    CWldSession* gActiveWldSession = nullptr;
+    // gActiveWldSession: moho/sim/WldSessionState.cpp (WldSessionState.h).
 
     /**
      * The world session's simulation driver (`sSimDriver`, 0x010C4F50), a
@@ -2117,7 +2123,7 @@ namespace moho
      *   differs, return the global) - WLD_BeginSession's assignment.
      */
     msvc8::auto_ptr<SWldSessionInfo> gPendingWldSessionInfo;
-    EWldFrameAction gWldFrameAction = EWldFrameAction::Inactive;
+    // gWldFrameAction: moho/sim/WldSessionState.cpp (WldSessionState.h).
 
     /**
      * Address: 0x00869870 (FUN_00869870, session-listener attach dispatch)
@@ -6918,6 +6924,12 @@ namespace moho
     IsMultiplayer = sessionInfo.mIsMultiplayer;
     IsGameOver = 0;
 
+    // Engine addition (issues #216, #218): the desync dump's header names the map, the game mods
+    // and the session kind; telemetry is sent for live multiplayer games only.
+    CDesyncRecorder::SetSessionInfo(
+      mMapName.c_str(), mLaunchInfo.get() != nullptr ? mLaunchInfo->mGameMods.c_str() : "", IsReplay, IsMultiplayer
+    );
+
     if (const LaunchInfoBase* const launchInfo = mLaunchInfo.get(); launchInfo != nullptr) {
       // One null army slot per launch-info army (0x008932A7): the run has to
       // exist before the first beat, because `DoBeat` addresses it by army
@@ -8556,6 +8568,20 @@ namespace moho
     return mBeatDebugCanvas.clone_retained();
   }
 
+#if FAF_SERVER_MODE
+  namespace
+  {
+    CWldSession::BeatObserver sBeatObserver = nullptr;
+    void* sBeatObserverContext = nullptr;
+  } // namespace
+
+  void CWldSession::SetBeatObserver(const BeatObserver observer, void* const context) noexcept
+  {
+    sBeatObserverContext = context;
+    sBeatObserver = observer;
+  }
+#endif
+
   /**
    * Address: 0x00894530 (FUN_00894530,
    * ?DoBeat@CWldSession@Moho@@QAEXV?$auto_ptr@USSyncData@Moho@@@std@@@Z)
@@ -8778,6 +8804,11 @@ namespace moho
             desync.beat,
             armyName.c_str()
           );
+          CDesyncRecorder::AddNote(gpg::STR_Printf(
+            "beat %d, %s: orders reached this client differently from what %s acknowledged sending", desync.beat,
+            armyName.c_str(), armyName.c_str()
+          ).c_str());
+          CDesyncRecorder::NoteOrdersAltered(desync.army); // issue #218: faf.orders_altered
           continue;
         }
         desyncArmyNames.push_back(armyName);
@@ -8785,14 +8816,39 @@ namespace moho
       }
 
       if (!desyncArmyNames.empty()) {
+        // Engine addition (issue #216): the dialog's diagnostic lines name the recorder's dump.
+        if (const std::string dumpPath = CDesyncRecorder::DumpPath(); !dumpPath.empty()) {
+          desyncArmyNames.push_back(msvc8::string(("Desync dump: " + dumpPath).c_str()));
+        }
         UI_ShowDesyncDialog(mGameTick, desyncArmyNames);
       }
     }
+
+#if FAF_SERVER_MODE
+    // Engine addition, server mode: `/sessionsummary` (WP11.6 check). Without it, nothing.
+    faf::remote::client::NoteSessionBeat(*this, beat);
+#endif
 
     if (beat.mGameOver && IsGameOver == 0u) {
       IsGameOver = 1u;
       UI_NoteGameOver();
       if (CFG_GetArgOption("/exitongameover", 0u, nullptr)) {
+        wxTheApp->ExitMainLoop();
+      }
+    }
+
+    // Engine addition (issue #218), test only: `/exitattick N` quits the app at game tick N the
+    // way /exitongameover does, so a scenario ends its games cleanly (the game-end telemetry
+    // record is sent on that path; mpemu's kill would skip it).
+    {
+      static int sExitAtTick = -2;
+      if (sExitAtTick == -2) {
+        msvc8::vector<msvc8::string> args;
+        sExitAtTick = CFG_GetArgOption("/exitattick", 1u, &args) && !args.empty() ? std::atoi(args[0].c_str()) : -1;
+      }
+      if (sExitAtTick >= 0 && static_cast<int>(mGameTick) >= sExitAtTick) {
+        sExitAtTick = -1;
+        gpg::Logf("exitattick: quitting at game tick %d", static_cast<int>(mGameTick));
         wxTheApp->ExitMainLoop();
       }
     }
@@ -8854,6 +8910,11 @@ namespace moho
         entity->UpdateVisibility();
       }
     }
+#if FAF_SERVER_MODE
+    if (sBeatObserver != nullptr) {
+      sBeatObserver(*this, beat.mCurBeat, sBeatObserverContext);
+    }
+#endif
 
     AdvanceCommandIssueHelpersToBeat(*mCommandManager, beat.mCurBeat);
 
@@ -8897,7 +8958,7 @@ namespace moho
     CFormation::UpdateOrientation(CursorInfo().mMouseWorldPos, mCurFormation);
 
     const std::int32_t tickAtFrameStart = mGameTick;
-    const std::int32_t targetTick = mGameTick + static_cast<std::int32_t>(std::floor(mTimeSinceLastTick));
+    const std::int32_t targetTick = mGameTick + msvc8::FloorToIntX87(mTimeSinceLastTick); // 0x00895BEA..0x00895BFD
 
     // Drain the driver's sync queue. Bounded at 100 beats so a burst after a
     // stall cannot make one frame arbitrarily long.
@@ -14668,12 +14729,21 @@ namespace moho
       SIM_SetSessionPacing(SelectSessionPacing(*wldSession, clientManager));
       // 0x0088C364..0x0088C37C: the inlined `scoped_ptr::reset` - the new
       // driver is stored first, then the previous one is deleted.
-      sSimDriver.reset(SIM_CreateDriver(
+      ISTIDriver* driver = SIM_CreateDriver(
         static_cast<CClientManagerImpl*>(clientManager),
         replayStream.release(),
         sessionInfo->mLaunchInfo,
         sessionInfo->mSourceId
-      ));
+      );
+#if FAF_SERVER_MODE
+      // Engine addition, server mode: `/loopback` runs the session through the remote
+      // driver, the lockstep driver standing in for its server (replays and single-player
+      // sessions only). Without it, unchanged.
+      driver = faf::remote::client::WrapForLoopback(
+        driver, *wldSession->mRules, launchMap->GetBounds3D(), wldSession->IsMultiplayer != 0
+      );
+#endif
+      sSimDriver.reset(driver);
 
       gWldFrameAction = EWldFrameAction::Initialize;
       if (outContinue != nullptr) {
@@ -14904,11 +14974,43 @@ namespace moho
       (void)UI_UpdateDisconnectDialogCallback();
     }
 
+    /**
+     * Address: 0x0088C9D0 (FUN_0088C9D0, func_CreateSWldSessionInfo)
+     *
+     * What it does:
+     * Drives the world-session `CreateSession` frame action, which only an
+     * explicit restart request (`RestartSession`) sets: builds a fresh session
+     * info from the active session - its map, its launch info, whether it is
+     * recorded - gives it a local client named after the session's own command
+     * source, and begins it, which schedules `Preload`.
+     *
+     * This only set `Preload`. `WLD_DoInitializing` has already released the
+     * pending session info, so `Preload` tore the session down, opened the
+     * loading screen and prefetched nothing, and `Loading` waited for a
+     * scenario that was never requested: a restart hung in the loading screen.
+     */
     void WLD_CreateSessionInfo()
     {
-      // Full `FUN_0088C9D0` session-info recreation still depends on
-      // unrecovered LaunchInfoNew/session bootstrap ownership lanes.
-      gWldFrameAction = EWldFrameAction::Preload;
+      // Engine addition: the binary reads the active session unchecked;
+      // without one there is nothing to restart, so leave to the front end.
+      const CWldSession* const session = gActiveWldSession;
+      if (session == nullptr) {
+        gWldFrameAction = EWldFrameAction::Exit;
+        return;
+      }
+
+      msvc8::auto_ptr<SWldSessionInfo> sessionInfo(new SWldSessionInfo());
+      sessionInfo->mMapName = session->mMapName;
+      sessionInfo->mLaunchInfo = session->mLaunchInfo;
+      sessionInfo->mIsBeingRecorded = session->IsBeingRecorded;
+      sessionInfo->mIsReplay = false;
+      sessionInfo->mIsMultiplayer = false;
+      sessionInfo->mClientManager = nullptr;
+      sessionInfo->mSourceId = 0xFFu;
+
+      const SSTICommandSource& localSource = session->cmdSources[static_cast<std::size_t>(session->ourCmdSource)];
+      SetupSinglePlayerCommandSourceLane(*sessionInfo, localSource.mName.c_str());
+      WLD_BeginSession(sessionInfo);
     }
   } // namespace
 
@@ -14928,15 +15030,7 @@ namespace moho
     sWldUIProvider = provider;
   }
 
-  EWldFrameAction WLD_GetFrameAction()
-  {
-    return gWldFrameAction;
-  }
-
-  void WLD_SetFrameAction(const EWldFrameAction action)
-  {
-    gWldFrameAction = action;
-  }
+  // WLD_GetFrameAction, WLD_SetFrameAction: moho/sim/WldSessionState.cpp.
 
   /**
    * Address: 0x0088BE80 (FUN_0088BE80, ?WLD_IsSessionActive@Moho@@YA_NXZ)
@@ -15202,33 +15296,6 @@ namespace moho
     sSimDriver.reset();
   }
 
-  /**
-   * Address: 0x0088BD40 (FUN_0088BD40)
-   */
-  LuaPlus::LuaObject WLD_LoadScenarioInfo(const msvc8::string& scenarioFile, LuaPlus::LuaState* const state)
-  {
-    if (state == nullptr) {
-      return {};
-    }
-
-    LuaPlus::LuaObject scenarioEnv(state);
-    if (FILE_GetFileInfo(scenarioFile.c_str(), nullptr, false)) {
-      // Both scripts run with `scenarioEnv` as their globals table, so the
-      // scenario file's top-level `ScenarioInfo = {...}` lands in it rather
-      // than in _G. This is the engine's own loader (VFS resolution + hook
-      // concatenation + setfenv); routing it through the Lua-level `doscript`
-      // binding instead loses the C++ error propagation the caller relies on.
-      scenarioEnv.AssignNewTable(state, 0, 0);
-      (void)SCR_LuaDoScript(state, "/lua/dataInit.lua", &scenarioEnv);
-      (void)SCR_LuaDoScript(state, scenarioFile.c_str(), &scenarioEnv);
-    }
-
-    if (scenarioEnv.IsNil()) {
-      return scenarioEnv;
-    }
-
-    return scenarioEnv["ScenarioInfo"];
-  }
 
   /**
    * Address: 0x00897220 (FUN_00897220, ?WLD_CreateSession@Moho@@YAPAVCWldSession@1@AAV?$auto_ptr@VLuaState@LuaPlus@@@std@@AAV?$auto_ptr@VRRuleGameRules@Moho@@@4@AAV?$auto_ptr@VCWldMap@Moho@@@4@AAUSWldSessionInfo@1@@Z)
@@ -15293,16 +15360,7 @@ namespace moho
     gActiveWldSession = nullptr;
   }
 
-  /**
-   * Address: 0x008972F0 (FUN_008972F0, ?WLD_GetSession@Moho@@YAPAVCWldSession@1@XZ)
-   *
-   * What it does:
-   * Returns the process-global active world-session pointer.
-   */
-  CWldSession* WLD_GetSession()
-  {
-    return gActiveWldSession;
-  }
+  // WLD_GetSession: moho/sim/WldSessionState.cpp.
 
   /**
    * Address: 0x0088D060 (FUN_0088D060, ?WLD_BeginSession@Moho@@YAXV?$auto_ptr@USWldSessionInfo@Moho@@@std@@@Z)
@@ -15471,26 +15529,21 @@ namespace moho
     clientManager->SetSimRate(clampedGameSpeed);
   }
 
-  /**
-   * Address: 0x0088D330 (FUN_0088D330, ?WLD_GetDriver@Moho@@YAPAVISTIDriver@1@XZ)
-   *
-   * What it does:
-   * Returns the world session's simulation driver (`sSimDriver.get()`).
-   */
-  ISTIDriver* WLD_GetDriver()
+  // WLD_GetDriver and WLD_GetActiveSession: moho/sim/WldSessionState.cpp; the
+  // driver is this file's sSimDriver, handed over through the hook below.
+} // namespace moho
+
+namespace
+{
+  // Engine addition (dedicated-server plan WPL.4): WLD_GetDriver's
+  // `sSimDriver.get()` (WldSessionState.cpp), set before main.
+  moho::ISTIDriver* SessionSimDriver()
   {
-    return sSimDriver.get();
+    return moho::sSimDriver.get();
   }
 
-  /**
-   * Address context:
-   * - global `Moho::sWldSession` consumed by save/load request paths.
-   */
-  CWldSession* WLD_GetActiveSession()
-  {
-    return gActiveWldSession;
-  }
-} // namespace moho
+  [[maybe_unused]] const bool gSessionSimDriverSet = (moho::sSessionSimDriver = &SessionSimDriver, true);
+} // namespace
 
 
 /**

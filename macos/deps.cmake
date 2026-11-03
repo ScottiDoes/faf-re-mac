@@ -1,34 +1,27 @@
-# Third-party libraries for the macOS build: Wild Magic 3.8 Foundation and zlib 1.2.3,
-# from the same submodules and source lists as the Windows build. (The Dx9 renderer
-# and application layers are Windows-only and not built.)
+# Third-party libraries for the macOS build: Wild Magic 3.8 (headers) and zlib 1.2.3,
+# from the same submodules as the Windows build.
 
-# --- Wild Magic 3.8 Foundation ---------------------------------------------------------
-# The source list (with its deliberate omissions) lives in cmake/deps/wildmagic; read it
-# from there instead of keeping a second copy.
+# --- Wild Magic 3.8 (headers only) -----------------------------------------------------
+# As in cmake/deps/wildmagic: the engine uses Wild Magic's header code only; the compiled
+# code it called is engine code (src/moho/math/Wm3Queries.cpp, Wm3FoundationStatics.cpp).
+# The subdirectory list is read from there instead of keeping a second copy. Wild Magic
+# templates that use members of dependent bases unqualified (accepted by cl without
+# /permissive-) are qualified by wildmagic3p8_faf_macos.patch.
 set(WM3_ROOT "${FAF_DEPENDENCIES_DIR}/WildMagic3p8")
 set(WM3_FOUNDATION "${WM3_ROOT}/Foundation")
 file(READ "${FAF_ROOT}/cmake/deps/wildmagic/CMakeLists.txt" _wm3_cmake)
 string(REGEX MATCH "set\\(WM3_FOUNDATION_SUBDIRS([^)]*)\\)" _ "${_wm3_cmake}")
 string(REGEX REPLACE "[ \t\r\n]+" ";" WM3_FOUNDATION_SUBDIRS "${CMAKE_MATCH_1}")
 list(FILTER WM3_FOUNDATION_SUBDIRS EXCLUDE REGEX "^$")
-string(REGEX MATCH "set\\(WM3_FOUNDATION_SOURCES([^)]*)\\)" _ "${_wm3_cmake}")
-string(REGEX REPLACE "[ \t\r\n]+" ";" WM3_FOUNDATION_SOURCES "${CMAKE_MATCH_1}")
-list(FILTER WM3_FOUNDATION_SOURCES EXCLUDE REGEX "^$")
-list(TRANSFORM WM3_FOUNDATION_SOURCES PREPEND "${WM3_FOUNDATION}/")
 set(WM3_FOUNDATION_INCLUDES "${WM3_FOUNDATION}")
 foreach(_dir IN LISTS WM3_FOUNDATION_SUBDIRS)
   list(APPEND WM3_FOUNDATION_INCLUDES "${WM3_FOUNDATION}/${_dir}")
 endforeach()
-list(LENGTH WM3_FOUNDATION_SOURCES _n)
-message(STATUS "Wild Magic Foundation: ${_n} sources")
+list(LENGTH WM3_FOUNDATION_SUBDIRS _n)
+message(STATUS "Wild Magic 3.8: headers from ${_n} Foundation folders")
 
-add_library(Wm3Foundation STATIC ${WM3_FOUNDATION_SOURCES})
-target_include_directories(Wm3Foundation PUBLIC ${WM3_FOUNDATION_INCLUDES})
-target_compile_definitions(Wm3Foundation PRIVATE NDEBUG _LIB)
-# Wild Magic templates that use members of dependent bases unqualified (accepted by cl
-# without /permissive-) are qualified by wildmagic3p8_faf_macos.patch.
-target_compile_options(Wm3Foundation PRIVATE -w)
-target_link_libraries(Wm3Foundation PRIVATE faf_codegen)
+add_library(Wm3Foundation INTERFACE)
+target_include_directories(Wm3Foundation SYSTEM INTERFACE ${WM3_FOUNDATION_INCLUDES})
 
 # --- zlib 1.2.3 ------------------------------------------------------------------------
 set(_zlib_src "${FAF_DEPENDENCIES_DIR}/zlib-1.2.3")

@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "gpg/core/utils/Logging.h"
+#include "legacy/math/X87Math.h"
 #include "lua/LuaObject.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/render/textures/CD3DBatchTexture.h"
@@ -11,6 +12,9 @@
 
 namespace moho
 {
+  // Engine addition (dedicated-server plan WPL.4), declared in CD3DBatchTexture.h.
+  BatchTextureFromFileHook sBatchTextureFromFile = nullptr;
+
   gpg::RType* REntityBlueprint::sType = nullptr;
 
   REntityBlueprint::REntityBlueprint()
@@ -116,9 +120,10 @@ namespace moho
 
   namespace
   {
+    // 0x005120A5..0x005120BC: the inlined float ceil; the low byte is stored.
     [[nodiscard]] std::uint8_t RoundExtentUpToCellCount(const float extent) noexcept
     {
-      return static_cast<std::uint8_t>(static_cast<int>(std::ceil(static_cast<double>(extent))));
+      return static_cast<std::uint8_t>(msvc8::CeilToIntX87(extent));
     }
 
     /** Where a non-absolute `StrategicIconName` is resolved from. */
@@ -146,7 +151,12 @@ namespace moho
       const msvc8::string& variantLabel
     )
     {
-      boost::shared_ptr<moho::CD3DBatchTexture> icon = moho::CD3DBatchTexture::FromFile(iconPath.c_str(), 0u);
+      // Engine addition (plan WPL.4): the texture is the client's
+      // (CD3DBatchTexture.h sBatchTextureFromFile); without a client there is none.
+      if (moho::sBatchTextureFromFile == nullptr) {
+        return {};
+      }
+      boost::shared_ptr<moho::CD3DBatchTexture> icon = moho::sBatchTextureFromFile(iconPath.c_str(), 0u);
       if (!icon) {
         gpg::Logf("Failed to load %s icon %s", variantLabel.c_str(), iconPath.c_str());
       }

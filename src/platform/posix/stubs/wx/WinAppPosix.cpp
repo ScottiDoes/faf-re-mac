@@ -771,3 +771,55 @@ void moho::WINX_ExitSplash()
 {
   sSplashScreen.reset();
 }
+
+// The client's event-loop hooks the simulation code calls (WinApp.h; moho/misc/WinPlatform.cpp,
+// left out of this build, defines them on Windows), set as WinApp.cpp sets them.
+moho::AppExitMainLoopHook moho::sAppExitMainLoop = nullptr;
+moho::AppPumpEventsHook moho::sAppPumpEvents = nullptr;
+moho::AppPumpStepHook moho::sAppPumpStep = nullptr;
+
+namespace
+{
+  // cfunc_EndLoggingStatsL (moho/misc/StatItem.cpp).
+  void AppExitMainLoop()
+  {
+    if (wxTheApp != nullptr) {
+      wxTheApp->ExitMainLoop();
+    }
+  }
+
+  // The event pump of CSimDriver::PerformNextEvent (moho/sim/SimDriver.cpp, 0x0073F430).
+  void AppPumpEvents()
+  {
+    bool keepIdle = true;
+    for (;;) {
+      if (wxTheApp->Pending()) {
+        wxTheApp->Dispatch();
+        keepIdle = true;
+        continue;
+      }
+      if (!keepIdle) {
+        break;
+      }
+      keepIdle = wxTheApp->ProcessIdle();
+    }
+  }
+
+  // The loop body of PausedMainThread::WaitUntilResumedAndDelete (moho/misc/PausedThread.cpp,
+  // 0x004B45F0).
+  bool AppPumpStep(bool& processIdle)
+  {
+    if (wxTheApp != nullptr && wxTheApp->Pending()) {
+      wxTheApp->Dispatch();
+      return true;
+    }
+    if (processIdle && wxTheApp != nullptr) {
+      processIdle = wxTheApp->ProcessIdle();
+    }
+    return false;
+  }
+
+  [[maybe_unused]] const bool gAppExitMainLoopSet = (moho::sAppExitMainLoop = &AppExitMainLoop, true);
+  [[maybe_unused]] const bool gAppPumpEventsSet = (moho::sAppPumpEvents = &AppPumpEvents, true);
+  [[maybe_unused]] const bool gAppPumpStepSet = (moho::sAppPumpStep = &AppPumpStep, true);
+} // namespace

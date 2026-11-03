@@ -1,4 +1,5 @@
 #include "moho/ai/CAiBrain.h"
+#include "platform/Interlocked.h"
 #include "legacy/math/X87Math.h"
 
 #include "legacy/algorithms/Sort.h"
@@ -573,7 +574,7 @@ namespace
   [[nodiscard]] std::int32_t AtomicLoadStatValueBits(volatile std::int32_t* const valueBits) noexcept
   {
     return static_cast<std::int32_t>(
-      InterlockedCompareExchange(reinterpret_cast<volatile long*>(valueBits), 0L, 0L)
+      InterlockedCompareExchange(reinterpret_cast<volatile platform::InterlockedLong*>(valueBits), 0L, 0L)
     );
   }
 
@@ -582,7 +583,7 @@ namespace
     for (;;) {
       const std::int32_t observedValueBits = AtomicLoadStatValueBits(valueBits);
       const std::int32_t exchangedValueBits = static_cast<std::int32_t>(InterlockedCompareExchange(
-        reinterpret_cast<volatile long*>(valueBits),
+        reinterpret_cast<volatile platform::InterlockedLong*>(valueBits),
         static_cast<long>(nextValueBits),
         static_cast<long>(observedValueBits)
       ));
@@ -603,7 +604,7 @@ namespace
       const std::int32_t nextValueBits = std::bit_cast<std::int32_t>(nextValue);
 
       const std::int32_t exchangedValueBits = static_cast<std::int32_t>(InterlockedCompareExchange(
-        reinterpret_cast<volatile long*>(valueBits),
+        reinterpret_cast<volatile platform::InterlockedLong*>(valueBits),
         static_cast<long>(nextValueBits),
         static_cast<long>(observedValueBits)
       ));
@@ -693,7 +694,7 @@ namespace
         }
 
         const std::int32_t exchanged = static_cast<std::int32_t>(InterlockedCompareExchange(
-          reinterpret_cast<volatile long*>(&statItem->mPrimaryValueBits),
+          reinterpret_cast<volatile platform::InterlockedLong*>(&statItem->mPrimaryValueBits),
           static_cast<long>(candidate),
           static_cast<long>(observed)
         ));
@@ -719,7 +720,7 @@ namespace
         }
 
         const std::int32_t exchangedBits = static_cast<std::int32_t>(InterlockedCompareExchange(
-          reinterpret_cast<volatile long*>(&statItem->mPrimaryValueBits),
+          reinterpret_cast<volatile platform::InterlockedLong*>(&statItem->mPrimaryValueBits),
           static_cast<long>(candidateBits),
           static_cast<long>(observedBits)
         ));
@@ -895,7 +896,10 @@ namespace
 
     return nullptr;
   }
+} // namespace
 
+namespace moho
+{
   /**
    * Address: 0x0062D7E0 (FUN_0062D7E0, func_CalulateWaterRatio)
    *
@@ -903,7 +907,7 @@ namespace
    * Samples the map height field at an 8x8 grid step and returns the ratio
    * of sampled cells where water elevation is above sampled terrain elevation.
    */
-  [[nodiscard]] float CalculateMapWaterRatio(const moho::STIMap& map)
+  float CalculateMapWaterRatio(const moho::STIMap& map)
   {
     const moho::CHeightField* const heightField = map.mHeightField.get();
     const int mapWidth = heightField->width;
@@ -998,7 +1002,10 @@ namespace
 
     return underwaterSampleCount / totalSampleCount;
   }
+} // namespace moho
 
+namespace
+{
   /**
    * Address: 0x00581910 (FUN_00581910, func_CreateCAiBrainLuaObject)
    *
@@ -3367,7 +3374,7 @@ int moho::cfunc_CAiBrainAddArmyStatL(LuaPlus::LuaState* const state)
     if (CArmyStatItem* const statItem = ResolveCachedArmyStatPath(armyStats, statName); statItem != nullptr) {
       statItem->SynchronizeAsInt();
       (void)InterlockedExchangeAdd(
-        reinterpret_cast<volatile long*>(&statItem->mPrimaryValueBits),
+        reinterpret_cast<volatile platform::InterlockedLong*>(&statItem->mPrimaryValueBits),
         static_cast<long>(intDelta)
       );
     }
@@ -8300,7 +8307,7 @@ int moho::cfunc_CAiBrainBuildPlatoonL(LuaPlus::LuaState* const state)
 
     const float baseCount = static_cast<float>(baseCountObject.GetInteger());
     const float scaledCountFloat = static_cast<float>(countMultiplierObj.GetNumber()) * baseCount;
-    const int scaledCount = static_cast<int>(std::floor(scaledCountFloat));
+    const int scaledCount = msvc8::FloorToIntX87(scaledCountFloat); // 0x0058C6F5..0x0058C708
 
     const LuaPlus::LuaObject builderUnitObject = builderTable[builderIndex];
     Unit* const builderUnit = SCR_FromLua_Unit(builderUnitObject);

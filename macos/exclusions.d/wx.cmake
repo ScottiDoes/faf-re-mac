@@ -11,4 +11,14 @@ list(APPEND FAF_MACOS_REPLACED_SOURCES
   # the allocation log, /crashtest). The headless runner has its own main(); its console
   # commands are registered by src/platform/posix/stubs/wx/WinMainPosix.cpp.
   "^moho/app/WinMain\\.cpp$=>platform/posix/stubs/wx/WinMainPosix.cpp"
+  # The crash dialog (a Win32 window, the clipboard, a shell call). Replaced by
+  # src/platform/posix/stubs/wx/CrashReportDialogPosix.cpp, which prints the report's path.
+  "^gpg/core/diagnostics/CrashReportDialog\\.cpp$=>platform/posix/stubs/wx/CrashReportDialogPosix.cpp"
+)
+
+list(APPEND FAF_MACOS_EXCLUDED_SOURCES
+  # The Windows platform services split out of WinApp.cpp (call stacks, symbol names, error
+  # text, message boxes): src/platform/posix/stubs/wx/WinAppPosix.cpp, WinApp.cpp's stand-in,
+  # already defines them. No static initializers.
+  "^moho/misc/WinPlatform\\.cpp$"
 )
