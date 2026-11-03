@@ -95,15 +95,22 @@ An app signed ad hoc (the default) runs on the Mac that built it. On another Mac
 
 Use the `xattr` command if games will be started from the FAF client before the app has been opened.
 
-For an app that opens anywhere without this, sign it with a Developer ID Application certificate and have Apple notarize it:
+For an app that opens anywhere without this, sign it with a Developer ID Application certificate and have Apple notarize it. `macos/release.sh` does all of it:
 
 ```sh
-SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" macos/build_app.sh
-xcrun notarytool submit "build/dist/FAF-Native-<commit>.dmg" --keychain-profile <profile> --wait
-xcrun stapler staple "build/dist/FAF-Native-<commit>.dmg"
+xcrun notarytool store-credentials <profile> --apple-id <you@example.com> --team-id <TEAMID>   # once
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=<profile> macos/release.sh
 ```
 
-These notarization steps are not automated or tested yet. `make_app.sh` already signs with the hardened runtime and a secure timestamp when given an identity, and `make_dmg.sh` signs the disk image with it.
+It builds the app signed with the hardened runtime and a secure timestamp, has Apple notarize it, and staples the ticket to it. It then makes the disk image from the stapled app (so the app inside opens offline too), notarizes and staples the image, and checks both with Gatekeeper. The result is `build/dist/FAF-Native.dmg`. Run it from a clean checkout.
+
+Give it a tag to also publish a GitHub release of the commit, with the disk image attached as `FAF-Native.dmg` (needs the GitHub CLI, `gh`, signed in, and the commit pushed):
+
+```sh
+SIGN_IDENTITY=... NOTARY_PROFILE=... macos/release.sh faf-native-2026.11.03
+```
+
+`https://github.com/<owner>/<repo>/releases/latest/download/FAF-Native.dmg` then always downloads the newest release. `GH_REPO=<owner>/<name>` picks the repository when the branch's remote isn't the GitHub one.
 
 ## For development
 
