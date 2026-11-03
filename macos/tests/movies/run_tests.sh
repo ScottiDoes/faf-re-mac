@@ -17,9 +17,9 @@ set -u
 root=${0:A:h:h:h:h}
 T=$root/build/m4-movies-tests
 W=(python3 -I "$root/macos/tests/bringup/watchdog.py")
-FA="/Users/scottharris/Gaming/Windows Steam.app/Contents/SharedSupport/prefix/drive_c/Program Files (x86)/Steam/steamapps/common/Supreme Commander Forged Alliance/movies"
+FA="/Users/scottharris/Gaming/Windows Steam (GPTK)/Windows Steam.app/Contents/SharedSupport/prefix/drive_c/Program Files (x86)/Steam/steamapps/common/Supreme Commander Forged Alliance/movies"
 FAF=$HOME/.faforever/movies
-export PATH=/opt/homebrew/bin:/Users/scottharris/Gaming/rosettax87/.venv/bin:$PATH
+export PATH=/opt/homebrew/bin:/Users/scottharris/Gaming/.faf/rosettax87/.venv/bin:$PATH
 failed=()
 step() { print -r -- ""; print -r -- "=== $*" }
 check() { local rc=$1; shift; if [[ $rc == 0 ]]; then print -r -- "--- PASS $*"; else print -r -- "--- FAIL $* (exit $rc)"; failed+=("$*"); fi }

@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Installs the game as the one the FAF client starts on this Mac:
-# ~/Gaming/faf-re-bin/native/FAF Native.app, which ~/Gaming/bin/fa-wrapper runs while
-# ~/Gaming/faf/use-native exists. One command from source to installed app:
+# ~/Gaming/.faf/faf-re-bin/native/FAF Native.app, which ~/Gaming/Windows Steam (GPTK)/bin/fa-wrapper runs while
+# ~/Gaming/.faf/faf/use-native exists. One command from source to installed app:
 #   1. builds faf_game and faf_replay (ninja -C build/macos)
 #   2. checks the sim against a recorded replay (macos/run_replay.sh, replay 27890640 at
 #      SPEED=50, about 15 s); any checksum mismatch stops here
@@ -18,7 +18,7 @@
 #   SIGN_IDENTITY  passed to make_app.sh (default ad hoc)
 set -eu
 root=${0:A:h:h:h}
-DEST=$HOME/Gaming/faf-re-bin/native
+DEST=$HOME/Gaming/.faf/faf-re-bin/native
 app=$DEST/FAF\ Native.app
 prev=$DEST/previous/FAF\ Native.app
 fail() { print -u2 "deploy: $*"; exit 1 }

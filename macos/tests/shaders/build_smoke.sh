@@ -2,7 +2,7 @@
 # Builds and runs the DXC bridge smoke test (no engine). Output: build/m2-shaders-tests/bridge_smoke
 set -e
 root=${0:A:h:h:h:h}
-sdk=${FAF_VULKAN_SDK:-$HOME/Gaming/VulkanSDK/1.4.363.0/macOS}
+sdk=${FAF_VULKAN_SDK:-$HOME/Gaming/.faf/VulkanSDK/1.4.363.0/macOS}
 out=$root/build/m2-shaders-tests
 mkdir -p $out
 clang++ -std=c++20 -O1 -g -Wall -Wextra -Wno-unused-parameter \

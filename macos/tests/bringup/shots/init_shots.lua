@@ -4,7 +4,7 @@
 -- engine's own dump_Frame command (/shots <dir>). Pass /init <this file>; the run folder stays
 -- the working directory.
 local here = InitFileDir
-InitFileDir = '/Users/scottharris/Gaming/faf-re-bin/run-native'
+InitFileDir = '/Users/scottharris/Gaming/.faf/faf-re-bin/run-native'
 dofile(InitFileDir .. '/init_bench.lua')
 table.insert(path, { dir = here .. '/mount', mountpoint = '/' })
 table.insert(hook, '/shotshook')

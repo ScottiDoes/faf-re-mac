@@ -47,7 +47,7 @@ SIGN_IDENTITY=${SIGN_IDENTITY:--}
 BUNDLE_ID=${BUNDLE_ID:-local.faf-re-mac}
 TARGET=${MACOS_DEPLOYMENT_TARGET:-14.0}
 SDK=${FAF_VULKAN_SDK:-$(sed -n 's/^FAF_VULKAN_SDK:PATH=//p' "${EXE:h}/CMakeCache.txt" 2>/dev/null)}
-SDK=${SDK:-$HOME/Gaming/VulkanSDK/1.4.363.0/macOS}
+SDK=${SDK:-$HOME/Gaming/.faf/VulkanSDK/1.4.363.0/macOS}
 fail() { print -u2 "make_app: $*"; exit 1 }
 # A Mach-O file's load commands and rpaths, one per line (paths may hold spaces).
 loads() { otool -L "$1" | awk '/^\t/ { sub(/^\t/, ""); sub(/ \(compatibility version.*$/, ""); print }' }

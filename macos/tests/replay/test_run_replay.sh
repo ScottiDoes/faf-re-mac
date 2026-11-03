@@ -32,7 +32,7 @@ out=$(cd "$OUT" && FAKE_TRACE=$trace FAKE_RC=0 FAF_REPLAY_EXE=$fake OUT=$OUT REP
       zsh "$root/macos/run_replay.sh" /simworkers 8)
 rc=$?
 check "exit status 0 passed through" '(( rc == 0 ))'
-check "runs in the run folder" 'grep -q "^cwd=/Users/scottharris/Gaming/faf-re-bin/run-native$" $trace'
+check "runs in the run folder" 'grep -q "^cwd=/Users/scottharris/Gaming/.faf/faf-re-bin/run-native$" $trace'
 check "relative REPLAY made absolute" 'grep -qx "replay=${OUT:A}/sub dir/replay_12345678.scfareplay" $trace'
 check "the runner finds the replay" 'grep -qx "exists=1" $trace'
 check "REPLAYID from the file name" 'grep -q "|/replayid|12345678|" $trace'

@@ -3,7 +3,7 @@
 #
 # Usage: macos/verify_replays.sh [replay.scfareplay | replay.fafreplay ...]
 #
-# Plays every replay (default ~/Gaming/faf/bench/corpus/*.scfareplay) with macos/run_replay.sh
+# Plays every replay (default ~/Gaming/.faf/faf/bench/corpus/*.scfareplay) with macos/run_replay.sh
 # at SPEED=50, once with /simworkers 0 (serial sim) and once with /simworkers 8 (threaded sim),
 # and checks each run against the checksums every player recorded. Then:
 #   - the negative control: a copy of one replay with one digest byte flipped at its middle

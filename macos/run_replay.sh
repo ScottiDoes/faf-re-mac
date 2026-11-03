@@ -1,14 +1,14 @@
 #!/bin/zsh
 # Headless native replay run (milestone 1): plays a FAF replay with build/macos/faf_replay and
 # checks the sim against every checksum the players recorded. It passes the replay benchmark's
-# arguments (~/Gaming/faf/bench/bench_replay.sh, mode fafre: /init init_bench.lua /nobugreport
+# arguments (~/Gaming/.faf/faf/bench/bench_replay.sh, mode fafre: /init init_bench.lua /nobugreport
 # /log /replay /replayid /benchspeed) plus /nosound /nomovie, from the native run folder
-# /Users/scottharris/Gaming/faf-re-bin/run-native (FAF's init files; init.lua reads
+# /Users/scottharris/Gaming/.faf/faf-re-bin/run-native (FAF's init files; init.lua reads
 # ../fa_path.lua and mounts ../gamedata, both next to that folder).
 #
 # Usage: macos/run_replay.sh [extra faf_replay switches ...]
 # Environment:
-#   REPLAY            replay file (default ~/Gaming/faf/bench/replay_27890640.scfareplay); a
+#   REPLAY            replay file (default ~/Gaming/.faf/faf/bench/replay_27890640.scfareplay); a
 #                     relative path is taken from the directory the script is started in
 #   REPLAYID          its id (default: the first run of digits in the file name, else the
 #                     name without its extension)
@@ -37,9 +37,9 @@
 set -u
 root=${0:A:h:h}
 build=$root/build/macos
-RUN=/Users/scottharris/Gaming/faf-re-bin/run-native
+RUN=/Users/scottharris/Gaming/.faf/faf-re-bin/run-native
 EXE=${FAF_REPLAY_EXE:-$build/faf_replay}
-REPLAY=${REPLAY:-/Users/scottharris/Gaming/faf/bench/replay_27890640.scfareplay}
+REPLAY=${REPLAY:-/Users/scottharris/Gaming/.faf/faf/bench/replay_27890640.scfareplay}
 REPLAY=${REPLAY:A}   # absolute: the run happens in the run folder (WAVE3 F3)
 if [[ -z ${REPLAYID:-} ]]; then
     # The first run of digits in the file name (replay_27890640, 27890640-Player), else the name.

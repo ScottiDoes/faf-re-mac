@@ -320,7 +320,7 @@ enum ClientRunner {
         return processIDs(matching: pattern).isEmpty
     }
 
-    /// The options that work for the client on a Mac (as ~/Gaming/faf/run-faf.command used them).
+    /// The options that work for the client on a Mac (as ~/Gaming/.faf/faf/run-faf.command used them).
     static func start(_ installed: InstalledClient) throws {
         let fm = FileManager.default
         let home = installed.clientFolder

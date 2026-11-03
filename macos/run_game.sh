@@ -1,6 +1,6 @@
 #!/bin/zsh
 # The game (milestones 2-3): runs build/macos/faf_game from the native run folder
-# /Users/scottharris/Gaming/faf-re-bin/run-native (FAF's init files; init_faf.lua reads
+# /Users/scottharris/Gaming/.faf/faf-re-bin/run-native (FAF's init files; init_faf.lua reads
 # ../fa_path.lua and mounts ../gamedata, both next to that folder), as the FAF client starts
 # the game: /init init_faf.lua /nobugreport, with sound (XACT on FAudio) and movies (FFmpeg),
 # and a log file. Rendering is faf-re's Vulkan renderer on MoltenVK (or
@@ -42,8 +42,8 @@
 set -u
 root=${0:A:h:h}
 build=$root/build/macos
-RUN=/Users/scottharris/Gaming/faf-re-bin/run-native
-SDK=/Users/scottharris/Gaming/VulkanSDK/1.4.363.0/macOS
+RUN=/Users/scottharris/Gaming/.faf/faf-re-bin/run-native
+SDK=/Users/scottharris/Gaming/.faf/VulkanSDK/1.4.363.0/macOS
 EXE=${FAF_GAME_EXE:-$build/faf_game}
 OUT=${OUT:-$build/game}
 mkdir -p "$OUT" || { print -u2 "run_game: cannot create $OUT"; exit 2 }

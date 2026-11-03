@@ -119,9 +119,9 @@ def main():
     with open(os.path.join(out, "steps.txt"), "w") as f:
         f.write("\n".join(steps) + "\n")
     # dump_Frame splits its argument at spaces: reach the folder through a path without one
-    # (~/Gaming/faf-re links to the repository on this machine).
+    # (~/Gaming/.faf/faf-re links to the repository on this machine).
     dumps = os.path.join(out, "dumps")
-    alias = os.path.expanduser("~/Gaming/faf-re")
+    alias = os.path.expanduser("~/Gaming/.faf/faf-re")
     if " " in dumps and os.path.realpath(alias) == os.path.realpath(root):
         dumps = alias + dumps[len(os.path.realpath(root)):]
     if os.path.isdir(dumps):

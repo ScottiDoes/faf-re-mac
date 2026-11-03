@@ -8,9 +8,9 @@ set -u
 root=${0:A:h:h:h:h}
 bin=$root/build/m2-textures-tests
 dump=${1:-$root/build/m2-textures-tests/samples}
-fa=$(sed -n 's/^fa_path = "\(.*\)"$/\1/p' /Users/scottharris/Gaming/faf-re-bin/fa_path.lua)
-vault=$(sed -n 's/^custom_vault_path = "\(.*\)"$/\1/p' /Users/scottharris/Gaming/faf-re-bin/fa_path.lua)
-sources=($fa/gamedata/*.scd /Users/scottharris/Gaming/faf-re-bin/gamedata/*(N) $fa/maps)
+fa=$(sed -n 's/^fa_path = "\(.*\)"$/\1/p' /Users/scottharris/Gaming/.faf/faf-re-bin/fa_path.lua)
+vault=$(sed -n 's/^custom_vault_path = "\(.*\)"$/\1/p' /Users/scottharris/Gaming/.faf/faf-re-bin/fa_path.lua)
+sources=($fa/gamedata/*.scd /Users/scottharris/Gaming/.faf/faf-re-bin/gamedata/*(N) $fa/maps)
 [[ -n $vault && -d $vault/maps ]] && sources+=($vault/maps)
 [[ -n $vault && -d $vault/mods ]] && sources+=($vault/mods)
 samples=(
