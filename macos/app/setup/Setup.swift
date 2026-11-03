@@ -149,6 +149,7 @@ enum Hookup: Equatable {
 struct ClientInfo: Equatable {
     var hasData = false
     var hasPrefs = false        // client.prefs exists: the client has run (and been logged in to) here
+    var prefsUnreadable = false // client.prefs isn't a JSON object (the client is half way through writing it)
     var gameType: String?
     var gameVersion: String?
     var installationPath: String?
@@ -164,11 +165,14 @@ struct ClientInfo: Equatable {
             info.gameVersion = luaString(text, "GameVersion")
         }
         info.hasPrefs = fm.fileExists(atPath: Places.clientData.appendingPathComponent("client.prefs").path)
-        if let data = try? Data(contentsOf: Places.clientData.appendingPathComponent("client.prefs")),
-           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let fa = root["forgedAlliance"] as? [String: Any] {
-            info.installationPath = fa["installationPath"] as? String
-            info.decorator = fa["executableDecorator"] as? String
+        if let data = try? Data(contentsOf: Places.clientData.appendingPathComponent("client.prefs")) {
+            if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let fa = root["forgedAlliance"] as? [String: Any]
+                info.installationPath = fa?["installationPath"] as? String
+                info.decorator = fa?["executableDecorator"] as? String
+            } else {
+                info.prefsUnreadable = true
+            }
         }
         return info
     }
@@ -320,7 +324,8 @@ final class SetupModel: ObservableObject {
         clientRunning = ClientRunner.isRunning()
         clientPrefsExist = FileManager.default.fileExists(atPath: Places.clientPrefs.path)
         checkLatestRelease()
-        client = ClientInfo.read()
+        let info = ClientInfo.read()
+        if !info.prefsUnreadable { client = info }
         let found = GameSearch.installations(client: client)
         if let saved = config.gamePath {
             game = GameFolder(URL(fileURLWithPath: saved))
@@ -545,6 +550,8 @@ final class SetupModel: ObservableObject {
         clientPrefsExist = FileManager.default.fileExists(atPath: Places.clientPrefs.path)
         if clientPrefsExist || !clientRunning { clientLaunching = false }
         let info = ClientInfo.read()
+        // The client rewrites client.prefs in place as it starts: a read in the middle keeps the last one.
+        guard !info.prefsUnreadable else { return }
         if info != client { client = info }
         autoApplyClientSettingsIfReady()
         if simpleMode && !simpleModePossible { simpleMode = false }
