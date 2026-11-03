@@ -92,7 +92,7 @@ The app you build is signed ad hoc, so it runs on your Mac. On another Mac, macO
 
 ## About
 
-FAF Native is built on [faf-re](https://github.com/Draiget/faf-re) by Draiget. This macOS copy of the engine exists with his OK ([Draiget/faf-re#252](https://github.com/Draiget/faf-re/issues/252)). faf-re has no licence, and neither does this repository.
+FAF Native is built on [faf-re](https://github.com/Draiget/faf-re) by Draiget.
 
 FAF Native isn't affiliated with Forged Alliance Forever, or with the original publisher or developer of *Supreme Commander: Forged Alliance*. It includes no game content: you need your own copy of the game.
 
