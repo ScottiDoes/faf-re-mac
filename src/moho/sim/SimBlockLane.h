@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
 
 #include <cstddef>
 #include <new>
@@ -13,8 +13,9 @@
 namespace moho
 {
   /**
-   * x64 only: the free list on the sim thread that formations and projectiles return to and that 11-bone pose arrays
-   * also allocate from, the last freed block handed out first.
+   * x64 and POSIX builds (every build whose `malloc_0` is not the binary's allocator, as in `Global.cpp`): the free
+   * list on the sim thread that formations and projectiles return to and that 11-bone pose arrays also allocate from,
+   * the last freed block handed out first.
    *
    * Units keep a raw formation pointer (`SInfoCache::mFormationLayer`), and `IsSameFormationLayerWith` (0x006A8D40)
    * compares pointers, so a stale pointer can equal a new formation at a reused address. In the binary these objects

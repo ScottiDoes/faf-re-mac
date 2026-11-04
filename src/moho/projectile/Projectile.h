@@ -112,7 +112,7 @@ namespace moho
      */
     ~Projectile() override;
 
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
     // The free list shared with formations; see SimBlockLane.
     [[nodiscard]] static void* operator new(std::size_t size);
     [[nodiscard]] static void* operator new(std::size_t, void* const place) noexcept { return place; }

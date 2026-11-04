@@ -269,7 +269,7 @@ namespace moho
 
     [[nodiscard]] static CAniPoseBone* AllocateBones(const std::size_t count)
     {
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
       if (count == kBinaryLaneBones) {
         static_assert(sizeof(CAniPoseBone) * kBinaryLaneBones <= SimBlockLane::kBlockBytes);
         void* const block = SimBlockLane::Allocate();
@@ -328,7 +328,7 @@ namespace moho
     /// the next formation's allocation, so that formation reuses the block (replay 27064121 at beat 7380).
     void FreeHeapBones() noexcept
     {
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
       if (capacity() == kBinaryLaneBones) {
         ::operator delete(mBegin);
         return;

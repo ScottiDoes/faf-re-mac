@@ -36,7 +36,7 @@ namespace moho
 
     constexpr std::size_t kUnheldBlockBytes = 2048u;
 
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
     static_assert(kUnheldBlockBytes == SimBlockLane::kBlockBytes);
 
     // A block's first word is a vtable when it held an object. The save and the restore run the same
@@ -129,7 +129,7 @@ namespace moho
 
     header.laneBlocks.clear();
     header.laneBytes.clear();
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
     const std::vector<void*>& freeBlocks = SimBlockLane::FreeBlocks();
     header.laneBytes.resize(freeBlocks.size() * SimBlockLane::kBlockBytes);
     std::uint8_t* out = header.laneBytes.data();
@@ -185,7 +185,7 @@ namespace moho
 
     sRestoredBlocks.clear();
     sRestoredFormationPointers.clear();
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
     std::vector<void*> freeBlocks;
     freeBlocks.reserve(header.laneBlocks.size());
     const std::uint8_t* in = header.laneBytes.data();
