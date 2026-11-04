@@ -16,10 +16,11 @@ Changes to the engine itself (the recovered code, the simulation, gameplay, feat
 
 ## Keep the engine code close to faf-re
 
-The port is merged with faf-re often, so every changed line in a faf-re file is a possible conflict.
+The port is merged with faf-re often, so every changed line in a faf-re file is a possible conflict. faf-re also takes the Mac changes it wants from here, so make them easy to take.
 
 - Put Mac code in `macos/` or `src/platform/posix/` where you can.
 - When a faf-re file has to change, keep the change small and inside `#if defined(FAF_POSIX)`, so other builds stay as they are.
+- Put a change to faf-re files in a commit of its own, apart from Mac-only work (the app, `.github/`, releases), so it can be taken whole.
 - Leave the top-level `README.md` and `CONTRIBUTING.md` alone: they're faf-re's. The Mac versions are in `.github/`.
 
 ## Games must match Windows
@@ -32,7 +33,8 @@ Changes to the app, the window, rendering, audio or docs don't need one. Say wha
 
 - One topic per pull request.
 - Build it with [macos/BUILDING.md](../macos/BUILDING.md) and say which Mac and macOS version you tested on.
-- Commit titles say what's true after the change, prefixed with the area: `macOS app: ...`, `macOS: ...`.
+- Commit and pull request titles follow faf-re's rules ([Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)): `<type>(<scope>): <what's true after the change>`, e.g. `fix(macos): ...`, `feat(macos/app): ...`, `build(macos): ...`. The types are in faf-re's [CONTRIBUTING.md](../CONTRIBUTING.md).
+- No AI or bot attribution lines (`Co-Authored-By: ...`) in commit messages: faf-re's checks reject them.
 - Say what you couldn't test.
 
 Files in `macos/` are under the MIT licence ([macos/LICENSE](../macos/LICENSE)), and contributions to them are too.
