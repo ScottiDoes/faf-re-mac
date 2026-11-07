@@ -657,7 +657,7 @@ void moho::SIM_PrepareLuaState(RRuleGameRules* const rules)
   if (rules == nullptr || !sim_PrepareLuaStateEarly) {
     return;
   }
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
   // A table array the sim thread sizes into the binary's 896-byte class passes a block of the
   // sim's free list (SimBlockLane::PassTopBlock), and a helper thread never does. The list is
   // empty until a sim frees a formation or projectile; one a previous game in this process left

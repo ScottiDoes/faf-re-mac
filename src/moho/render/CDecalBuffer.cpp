@@ -34,7 +34,7 @@ namespace
    */
   void AppendVisibleDecal(fa::vector<SDecalInfo>& visibleDecals, const SDecalInfo& decalInfo)
   {
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
     // 6 entries of 0x90 bytes land in the binary's 896-byte class (0x0077ACC0).
     const void* const oldStorage = visibleDecals.begin();
     visibleDecals.push_back(decalInfo);
@@ -405,7 +405,7 @@ void CDecalBuffer::CleanupTick()
     CDecalBucketSet expired;
     expired.swap(first->second);
     mStartTickBuckets.erase(first);
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(_M_X64) || defined(__x86_64__) || defined(FAF_POSIX)
     // The set is sorted by pointer, and each release can grow the id set's words, whose storage takes blocks
     // (`SimBlockLane`). Retail's heap gives this order nearly always: 26992801, ticks 4155 to 4157, has 2 of 204 ids
     // out of it, and it takes the same blocks retail does at all three.
