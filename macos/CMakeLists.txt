@@ -153,7 +153,9 @@ target_compile_definitions(faf_engine PUBLIC
   BOOST_ALL_NO_LIB BOOST_NO_AUTO_PTR
   # boost 1.34 uses std::unary_function/binary_function, which libc++ removed in C++17.
   _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION
-  UNICODE _UNICODE)
+  UNICODE _UNICODE
+  # faf-re 197d6290 renamed msvc8:: to fa::; its root CMakeLists keeps msvc8=fa for code not moved yet.
+  msvc8=fa)
 target_include_directories(faf_engine BEFORE PUBLIC
   # Stand-in <windows.h>, <winsock2.h>, ... ahead of everything else.
   "${FAF_SRC}/platform/posix/include"
