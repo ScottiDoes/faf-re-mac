@@ -14,6 +14,10 @@ list(APPEND FAF_MACOS_REPLACED_SOURCES "^gpg/gal/effects/ShaderCompiler\\.cpp$=>
 # decode cache; macos/porting/textures.md).
 list(APPEND FAF_MACOS_REPLACED_SOURCES "^gpg/gal/backends/common/ImageCodec\\.cpp$=>platform/posix/stubs/render/gal/ImageCodecPosix.cpp")
 
+# DirectXTex decoder and encoder for ImageCodec.cpp without d3dx11_43.dll (issue #318).
+# Its only caller is ImageCodec.cpp, replaced above; nothing replaces it.
+list(APPEND FAF_MACOS_EXCLUDED_SOURCES "^gpg/gal/backends/common/ImageCodecDirectXTex\\.cpp$")
+
 # Win32 colour cursor (GDI DIB + CreateIconIndirect + user32 SetCursor/ShowCursor).
 # Replaced by platform/posix/stubs/render/gal/WindowsCursorPosix.cpp: real colour cursors
 # through the shell (SDL3; macos/porting/shell.md).
