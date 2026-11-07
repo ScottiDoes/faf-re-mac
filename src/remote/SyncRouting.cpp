@@ -10,12 +10,15 @@
 #include "gpg/core/utils/Logging.h"
 #include "lua/LuaTableIterator.h"
 #include "moho/entity/Entity.h"
+#include "moho/entity/EntityCategoryReflection.h"
 #include "moho/entity/EntityDb.h"
+#include "moho/entity/EntityId.h"
 #include "moho/lua/CScrLuaObjectFactory.h"
 #include "moho/sim/CArmyImpl.h"
 #include "moho/sim/SSTIArmyVariableData.h"
 #include "moho/sim/SSTICommandSource.h"
 #include "moho/sim/SimDriver.h"
+#include "remote/VisibilityOracle.h"
 #include "moho/sim/Sim.h"
 
 // Engine addition, server mode: see SyncRouting.h.
@@ -101,7 +104,7 @@ namespace faf::remote
       {"ProfilerData", ESyncRoute::Observers},
       {"QueryResults", ESyncRoute::Everyone},
       {"RecallRequest", ESyncRoute::Observers},
-      {"Reclaim", ESyncRoute::Everyone},
+      {"Reclaim", ESyncRoute::Reclaim},
       {"ReleaseIds", ESyncRoute::ReleasedIds},
       {"RemoveCameraMarkers", ESyncRoute::Everyone},
       {"RemovePingGroups", ESyncRoute::Everyone},
@@ -133,6 +136,16 @@ namespace faf::remote
       {"Voice", ESyncRoute::Observers},
       {"WepPriority", ESyncRoute::Observers},
       {"__ArmyStats", ESyncRoute::Observers},
+    };
+
+    constexpr SSyncIdField kIdFields[] = {
+      {"CancelCountdown", "entity", ESyncIdAudience::Owner},  // `lua/SimSync.lua:189`
+      {"FloatingEntityText", "entity", ESyncIdAudience::Owner}, // `lua/SimSync.lua:164`
+      {"Reclaim", "", ESyncIdAudience::Seen},                 // `lua/sim/Prop.lua:390`
+      {"ReleaseIds", "", ESyncIdAudience::Owner},             // `lua/sim/Unit.lua:2173`
+      {"StartCountdown", "entity", ESyncIdAudience::Owner},   // `lua/SimSync.lua:177`
+      {"UnitData", "", ESyncIdAudience::Owner},               // `lua/sim/Unit.lua:79`
+      {"UserUnitEnhancements", "", ESyncIdAudience::Allies},  // `lua/SimSync.lua:109`
     };
 
     /** A stream that appends to a vector, for `LuaObject::ToByteStream`. */
@@ -207,7 +220,8 @@ namespace faf::remote
     /**
      * Whether an engine function reads only, as a function run once per player must (plan WPR.26):
      * more than one run of a write would change the sim. `Get`, `Is` and `Can` name the sim's
-     * readers; the rest are the Lua library's and the log's, which touch no sim state.
+     * readers; the rest are the Lua library's and the log's, which touch no sim state, and
+     * `SyncRecallStatus`, whose wrapper here only notes a due tick.
      */
     [[nodiscard]] bool ReadsOnly(const char* const name) noexcept
     {
@@ -222,7 +236,8 @@ namespace faf::remote
       for (const char* const known :
            {"insert", "remove", "getn", "getsize", "empty", "find", "pairs", "ipairs", "next", "type", "tostring", "tonumber", "unpack",
             "rawget", "getmetatable", "setmetatable", "assert", "import", "WARN", "LOG", "SPEW", "_ALERT", "format", "len", "sub", "lower",
-            "upper", "OkayToMessWithArmy", "ArmyIsCivilian", "EntityCategoryContains"}) {
+            "upper", "OkayToMessWithArmy", "ArmyIsCivilian", "ArmyIsOutOfGame", "EntityCategoryContains",
+            "SyncRecallStatus"}) {
         if (std::strcmp(name, known) == 0) {
           return true;
         }
@@ -230,10 +245,25 @@ namespace faf::remote
       return false;
     }
 
+    int RecallResyncThunk(lua_State* state);
+
+    /**
+     * What has no name to go by, as a call from C or a metamethod: a category set's `+`, `-` and `*`,
+     * which make a new set, and `ResyncRecallVoting`'s wrapper, a call of this file's own.
+     */
+    [[nodiscard]] bool IsKnownNameless(lua_State* const state, lua_Debug* const debug)
+    {
+      lua_getinfo(state, "f", debug);
+      const lua_CFunction function = lua_tocfunction(state, -1);
+      lua_settop(state, -2);
+      return function == &moho::cfunc_EntityCategory__add || function == &moho::cfunc_EntityCategory__sub
+             || function == &moho::cfunc_EntityCategory__mul || function == &RecallResyncThunk;
+    }
+
     void FanOutCallHook(lua_State* const state, lua_Debug* const debug)
     {
       if (lua_getinfo(state, "Sn", debug) != 0 && debug->what != nullptr && std::strcmp(debug->what, "C") == 0 && !ReadsOnly(debug->name)
-          && sActiveRouter != nullptr) {
+          && !(debug->name == nullptr && IsKnownNameless(state, debug)) && sActiveRouter != nullptr) {
         sActiveRouter->NoteFanOutViolation(debug->name != nullptr ? debug->name : "?");
       }
     }
@@ -301,10 +331,22 @@ namespace faf::remote
       const int argumentCount = lua_gettop(state);
       CSyncRouter* const router = sActiveRouter;
       const char* const name = argumentCount > 0 && lua_isstring(state, 1) ? lua_tostring(state, 1) : nullptr;
+      if (router != nullptr && name != nullptr && std::strcmp(name, "SetRecallVote") == 0) {
+        // `ArmyRequestRecall` (`lua/sim/Recall.lua:267`) forks the vote's thread, a local function.
+        router->SetForkingRecallVote(true);
+        struct SEnd
+        {
+          CSyncRouter& router;
+          ~SEnd() { router.SetForkingRecallVote(false); }
+        } end{*router};
+        CallOriginal(state, argumentCount, 0);
+        return 0;
+      }
       if (router != nullptr && router->CurrentSim() != nullptr && name != nullptr
           && std::strcmp(name, "SharePaintingBrushStroke") == 0) {
         moho::Sim& sim = *router->CurrentSim();
-        const std::int32_t source = router->SourceArmy(sim);
+        const std::int32_t sourceView = router->SourceView(sim);
+        const std::int32_t source = sourceView >= 0 ? router->ViewArmy(static_cast<std::size_t>(sourceView)) : -1;
         const SFanOutGuard guard(state);
         for (std::size_t view = 0; view < router->ViewCount(); ++view) {
           if (router->Allied(sim, view, source)) {
@@ -339,6 +381,24 @@ namespace faf::remote
       return 0;
     }
 
+    /**
+     * Threads that act only for their brain's player, once they start: what they write depends on
+     * that player's focus alone. `lua/aibrain.lua:286` tells the player of a voice-over only when the
+     * brain is the player's. A brain's `EnergyExcessThread`
+     * (`lua/aibrains/components/EnergyManagerBrainComponent.lua:80`) starts before a server's routing
+     * does, so it's found by its field when the routing starts.
+     */
+    struct SOwnedThread
+    {
+      const char* module;
+      const char* className;
+      const char* function;
+    };
+    constexpr SOwnedThread kOwnedThreads[] = {
+      {"/lua/aibrain.lua", "AIBrain", "PlayVOSoundThread"},
+    };
+    constexpr const char* kOwnedThreadFields[] = {"EnergyExcessThread"};
+
     /** The army (1-based) of a unit's `Army` or a brain's `GetArmyIndex()`; 0 if neither. */
     [[nodiscard]] int ArmyOfSelf(lua_State* const state, const int index)
     {
@@ -361,8 +421,8 @@ namespace faf::remote
     }
 
     /**
-     * A method that writes per-player data only under its object's own focus: once, under the
-     * owner's. `Unit:SendNotifyMessage` (`lua/sim/Unit.lua:4971`).
+     * A method that writes per-player data only under its object's own focus: under each view
+     * focused on its owner. `Unit:SendNotifyMessage` (`lua/sim/Unit.lua:4971`) writes only `Sync`.
      */
     int OwnerThunk(lua_State* const state)
     {
@@ -371,20 +431,27 @@ namespace faf::remote
       const int army = router != nullptr && router->CurrentSim() != nullptr && argumentCount > 0 && lua_istable(state, 1)
                          ? ArmyOfSelf(state, 1)
                          : 0;
-      if (army <= 0 || static_cast<std::size_t>(army) > router->ViewCount()) {
+      if (army <= 0 || router->ViewOfArmy(army - 1) < 0) {
         const int base = lua_gettop(state);
         CallOriginal(state, argumentCount, LUA_MULTRET);
         return lua_gettop(state) - base;
       }
-      SViewScope scope(*router, *router->CurrentSim(), army - 1);
-      const int base = lua_gettop(state);
-      CallOriginal(state, argumentCount, LUA_MULTRET);
-      return lua_gettop(state) - base;
+      moho::Sim& sim = *router->CurrentSim();
+      const SFanOutGuard guard(state);
+      for (std::size_t view = 0; view < router->ViewCount(); ++view) {
+        if (router->ViewArmy(view) == army - 1) {
+          SViewScope scope(*router, sim, static_cast<std::int32_t>(view));
+          CallOriginal(state, argumentCount, 0);
+        }
+      }
+      return 0;
     }
 
     /**
      * `DiplomacyHandler(action)` (`lua/SimDiplomacy.lua:6`) writes the action for its target only
-     * under the target's focus, and changes alliances once: once, under `action.To`'s.
+     * under the target's focus, and changes alliances: once, under the first view on `action.To`.
+     * Its announcement of an alliance made or broken, for everyone but the two sides (`:52`), then
+     * goes to each of those.
      */
     int ActionTargetThunk(lua_State* const state)
     {
@@ -397,12 +464,176 @@ namespace faf::remote
         army = lua_isnumber(state, -1) ? static_cast<int>(lua_tonumber(state, -1)) : 0;
         lua_settop(state, -2);
       }
-      if (army <= 0 || static_cast<std::size_t>(army) > router->ViewCount()) {
+      const std::int32_t view = army > 0 ? router->ViewOfArmy(army - 1) : -1;
+      if (view < 0) {
         CallOriginal(state, argumentCount, 0);
         return 0;
       }
-      SViewScope scope(*router, *router->CurrentSim(), army - 1);
+      moho::Sim& sim = *router->CurrentSim();
+      {
+        SViewScope scope(*router, sim, view);
+        CallOriginal(state, argumentCount, 0);
+      }
+      lua_pushstring(state, "Action");
+      lua_gettable(state, 1);
+      const char* const kind = lua_isstring(state, -1) ? lua_tostring(state, -1) : "";
+      const bool announced = std::strcmp(kind, "accept") == 0 || std::strcmp(kind, "break") == 0;
+      lua_settop(state, -2);
+      if (announced) {
+        lua_pushstring(state, "From");
+        lua_gettable(state, 1);
+        const int from = lua_isnumber(state, -1) ? static_cast<int>(lua_tonumber(state, -1)) : 0;
+        lua_settop(state, -2);
+        LuaPlus::LuaObject announce = moho::SCR_Import(sim.mLuaState, "/lua/simdiplomacy.lua")["SyncAnnouncement"];
+        if (announce.IsFunction()) {
+          const SFanOutGuard guard(state);
+          for (std::size_t other = 0; other < router->ViewCount(); ++other) {
+            const std::int32_t otherArmy = router->ViewArmy(other);
+            if (otherArmy != army - 1 && otherArmy != from - 1) {
+              SViewScope scope(*router, sim, static_cast<std::int32_t>(other));
+              announce.PushStack(state);
+              lua_pushvalue(state, 1);
+              lua_call(state, 1, 0);
+            }
+          }
+        }
+      }
+      return 0;
+    }
+
+    /**
+     * `lua/sim/Recall.lua`'s writers, called when the code that runs once found that its focus is on
+     * the voting team: once under each view of that team. `SyncRecallVote` and `SyncOpenRecallVote`
+     * (which reads the view's own focus), `SyncCancelRecallVote`.
+     */
+    int RecallTeamThunk(lua_State* const state)
+    {
+      const int argumentCount = lua_gettop(state);
+      CSyncRouter* const router = sActiveRouter;
+      const std::int32_t focus = router != nullptr ? router->FocusForLua() : -1;
+      if (focus < 0 || router->CurrentSim() == nullptr) {
+        CallOriginal(state, argumentCount, 0);
+        return 0;
+      }
+      moho::Sim& sim = *router->CurrentSim();
+      const SFanOutGuard guard(state);
+      for (std::size_t view = 0; view < router->ViewCount(); ++view) {
+        if (router->Allied(sim, view, focus)) {
+          SViewScope scope(*router, sim, static_cast<std::int32_t>(view));
+          CallOriginal(state, argumentCount, 0);
+        }
+      }
+      return 0;
+    }
+
+    /**
+     * `SyncCloseRecallVote(passed)`: the team's writer, and what the voting thread does for a client
+     * off the team when the vote passes (`lua/sim/Recall.lua:195`), which under the requester's focus
+     * it doesn't reach.
+     */
+    int RecallCloseThunk(lua_State* const state)
+    {
+      const int argumentCount = lua_gettop(state);
+      CSyncRouter* const router = sActiveRouter;
+      const std::int32_t focus = router != nullptr ? router->FocusForLua() : -1;
+      const bool passed = argumentCount > 0 && lua_toboolean(state, 1) != 0;
+      (void)RecallTeamThunk(state);
+      if (!passed || focus < 0 || router->CurrentSim() == nullptr) {
+        return 0;
+      }
+      moho::Sim& sim = *router->CurrentSim();
+      LuaPlus::LuaState* const luaState = sim.mLuaState;
+      LuaPlus::LuaObject brains = luaState->GetGlobals()["ArmyBrains"];
+      LuaPlus::LuaObject brain = brains.IsTable() ? brains[static_cast<int32_t>(focus + 1)] : LuaPlus::LuaObject{};
+      LuaPlus::LuaObject nickname = brain.IsTable() ? brain["Nickname"] : LuaPlus::LuaObject{};
+      LuaPlus::LuaObject announce = moho::SCR_Import(luaState, "/lua/simdiplomacy.lua")["SyncAnnouncement"];
+      if (!announce.IsFunction()) {
+        return 0;
+      }
+      LuaPlus::LuaObject announcement;
+      announcement.AssignNewTable(luaState, 0, 2u);
+      announcement.SetString("Action", "recall");
+      announcement.SetString("Team", nickname.IsString() ? nickname.GetString() : "");
+      const SFanOutGuard guard(state);
+      for (std::size_t view = 0; view < router->ViewCount(); ++view) {
+        if (!router->Allied(sim, view, focus)) {
+          SViewScope scope(*router, sim, static_cast<std::int32_t>(view));
+          announce.PushStack(state);
+          announcement.PushStack(state);
+          lua_call(state, 1, 0);
+        }
+      }
+      return 0;
+    }
+
+    /**
+     * `SyncRecallStatus()`: a lockstep client's sim keeps one thread that sends its status as its
+     * cooldown runs out. Here each view has a due tick (`RunRecallStatus`).
+     */
+    int RecallStatusThunk(lua_State* const state)
+    {
+      CSyncRouter* const router = sActiveRouter;
+      if (router == nullptr || router->CurrentSim() == nullptr) {
+        return 0;
+      }
+      const moho::Sim& sim = *router->CurrentSim();
+      const std::int32_t focus = router->FocusForLua();
+      for (std::size_t view = 0; view < router->ViewCount(); ++view) {
+        const bool due = focus < 0 || (router->SingleViewRecallStatus() > 0 ? static_cast<std::int32_t>(view) == router->CurrentView()
+                                                                           : router->Allied(sim, view, focus));
+        if (due) {
+          router->MarkRecallStatus(view);
+        }
+      }
+      return 0;
+    }
+
+    /** `ResyncRecallVoting()` writes for the view whose focus is set: its status too, and no other's. */
+    int RecallResyncThunk(lua_State* const state)
+    {
+      const int argumentCount = lua_gettop(state);
+      CSyncRouter* const router = sActiveRouter;
+      if (router != nullptr) {
+        router->AddSingleViewRecallStatus(1);
+      }
+      struct SEnd
+      {
+        CSyncRouter* router;
+        ~SEnd()
+        {
+          if (router != nullptr) {
+            router->AddSingleViewRecallStatus(-1);
+          }
+        }
+      } end{router};
       CallOriginal(state, argumentCount, 0);
+      return 0;
+    }
+
+    /**
+     * `AIBrain:SetDefeatStatus(status)` (`lua/aibrain.lua:435`) tells `lua/sim/Recall.lua:45` of a
+     * defeat through a function it took before there was a router: what that does, for each view on
+     * the army's team, after it has run as it is.
+     */
+    int RecallDefeatThunk(lua_State* const state)
+    {
+      const int argumentCount = lua_gettop(state);
+      CSyncRouter* const router = sActiveRouter;
+      const bool recalled = argumentCount > 1 && lua_isstring(state, 2) && std::strcmp(lua_tostring(state, 2), "Recalled") == 0;
+      const int army = router != nullptr && argumentCount > 0 && lua_istable(state, 1) ? ArmyOfSelf(state, 1) : 0;
+      CallOriginal(state, argumentCount, 0);
+      if (army <= 0 || recalled || router->CurrentSim() == nullptr || !router->RecallResync().IsFunction()) {
+        return 0;
+      }
+      moho::Sim& sim = *router->CurrentSim();
+      const SFanOutGuard guard(state);
+      for (std::size_t view = 0; view < router->ViewCount(); ++view) {
+        if (router->Allied(sim, view, army - 1)) {
+          SViewScope scope(*router, sim, static_cast<std::int32_t>(view));
+          router->RecallResync().PushStack(state);
+          lua_call(state, 0, 0);
+        }
+      }
       return 0;
     }
 
@@ -422,12 +653,24 @@ namespace faf::remote
       {"/lua/sim/Unit.lua", "Unit", "SendNotifyMessage", &OwnerThunk},
       {"/lua/SimCallbacks.lua", nullptr, "DoCallback", &DoCallbackThunk},
       {"/lua/SimUtils.lua", nullptr, "SendChatToReplay", &SimOwnThunk},
+      {"/lua/sim/recall.lua", nullptr, "SyncRecallVote", &RecallTeamThunk},
+      {"/lua/sim/recall.lua", nullptr, "SyncOpenRecallVote", &RecallTeamThunk},
+      {"/lua/sim/recall.lua", nullptr, "SyncCancelRecallVote", &RecallTeamThunk},
+      {"/lua/sim/recall.lua", nullptr, "SyncCloseRecallVote", &RecallCloseThunk},
+      {"/lua/sim/recall.lua", nullptr, "SyncRecallStatus", &RecallStatusThunk},
+      {"/lua/sim/recall.lua", nullptr, "ResyncRecallVoting", &RecallResyncThunk},
+      {"/lua/aibrain.lua", "AIBrain", "SetDefeatStatus", &RecallDefeatThunk},
     };
   } // namespace
 
   std::span<const SSyncKeyRoute> SyncKeyRoutes() noexcept
   {
     return kRoutes;
+  }
+
+  std::span<const SSyncIdField> SyncIdFields() noexcept
+  {
+    return kIdFields;
   }
 
   ESyncRoute RouteOfSyncKey(const std::string_view key, bool& known) noexcept
@@ -443,37 +686,168 @@ namespace faf::remote
     : mPlayers(viewCount)
   {
     sActiveRouter = this;
+    moho::LUA_SetThreadRouting(this);
+    for (std::size_t view = 0; view < mPlayers.size(); ++view) {
+      mPlayers[view].army = static_cast<std::int32_t>(view);
+    }
   }
 
   CSyncRouter::~CSyncRouter()
   {
     if (sActiveRouter == this) {
       sActiveRouter = nullptr;
+      moho::LUA_SetThreadRouting(nullptr);
     }
   }
 
   std::int32_t CSyncRouter::FocusForLua() const noexcept
   {
-    return mFrames.empty() ? -1 : mFrames.back().view;
+    return mFrames.empty() || mFrames.back().view < 0 ? -1 : mPlayers[static_cast<std::size_t>(mFrames.back().view)].army;
   }
 
-  std::int32_t CSyncRouter::SourceArmy(const moho::Sim& sim) const
+  std::int32_t CSyncRouter::ViewOfArmy(const std::int32_t army) const noexcept
   {
-    // `GetArmyOfCommandSource` (`lua/SimUtils.lua`): the army the source may command. A source that
-    // commands no army is an observer's.
-    const auto source = static_cast<unsigned int>(sim.mCurCommandSource);
-    for (std::size_t army = 0; army < sim.mArmiesList.size() && army < mPlayers.size(); ++army) {
-      const moho::CArmyImpl* const candidate = sim.mArmiesList[army];
-      if (candidate != nullptr && candidate->mVarDat.mValidCommandSources.Contains(source)) {
-        return static_cast<std::int32_t>(army);
+    for (std::size_t view = 0; view < mPlayers.size(); ++view) {
+      if (mPlayers[view].army == army) {
+        return static_cast<std::int32_t>(view);
       }
     }
     return -1;
   }
 
+  std::int32_t CSyncRouter::SourceView(const moho::Sim& sim) const
+  {
+    const auto source = static_cast<unsigned int>(sim.mCurCommandSource);
+    for (std::size_t view = 0; view < mPlayers.size(); ++view) {
+      if (mPlayers[view].source == static_cast<std::int32_t>(source)) {
+        return static_cast<std::int32_t>(view);
+      }
+    }
+    // Before the first sync, or a source no view's client has: the first army it may command
+    // (`GetArmyOfCommandSource`, `lua/SimUtils.lua`). One that commands no army is an observer's.
+    for (std::size_t army = 0; army < sim.mArmiesList.size(); ++army) {
+      const moho::CArmyImpl* const candidate = sim.mArmiesList[army];
+      if (candidate != nullptr && candidate->mVarDat.mValidCommandSources.Contains(source)) {
+        return ViewOfArmy(static_cast<std::int32_t>(army));
+      }
+    }
+    return -1;
+  }
+
+  void CSyncRouter::FollowCommandSources(const moho::Sim& sim)
+  {
+    // A session gives humans their sources in army order (`lua/simInit.lua:459-470`, `:480-487`), and
+    // an army can hold several: with shared control, its allies' too.
+    std::int32_t human = 0;
+    for (std::size_t view = 0; view < mPlayers.size() && view < sim.mArmiesList.size(); ++view) {
+      SPlayerSync& player = mPlayers[view];
+      if (player.source >= 0) {
+        if (player.army < 0 || static_cast<std::size_t>(player.army) >= sim.mArmiesList.size()) {
+          continue;
+        }
+        const moho::CArmyImpl* const current = sim.mArmiesList[static_cast<std::size_t>(player.army)];
+        const auto source = static_cast<unsigned int>(player.source);
+        const bool onFocus = current != nullptr && current->mVarDat.mValidCommandSources.Contains(source);
+        const bool left = player.sourceOnFocus && !onFocus;
+        player.sourceOnFocus = onFocus;
+        if (!left) {
+          continue; // a view moved with `SetFocusArmy` isn't holding its source there
+        }
+        // Gone from its army. A defeat just removes it (`lua/sim/Victory.lua:37`); a merge gives it
+        // to another.
+        for (std::size_t army = 0; army < sim.mArmiesList.size(); ++army) {
+          const moho::CArmyImpl* const candidate = sim.mArmiesList[army];
+          if (candidate != nullptr && candidate->mVarDat.mValidCommandSources.Contains(source)) {
+            MoveView(view, static_cast<std::int32_t>(army));
+            break;
+          }
+        }
+        continue;
+      }
+      const moho::CArmyImpl* const army = sim.mArmiesList[view];
+      if (army == nullptr) {
+        continue;
+      }
+      for (std::int32_t source = 0; source < 64; ++source) {
+        if (army->mVarDat.mValidCommandSources.Contains(static_cast<unsigned int>(source))) {
+          player.source = army->mVarDat.mValidCommandSources.Contains(static_cast<unsigned int>(human)) ? human : source;
+          player.sourceOnFocus = true;
+          ++human;
+          break;
+        }
+      }
+    }
+  }
+
+  void CSyncRouter::MoveView(const std::size_t view, const std::int32_t army)
+  {
+    mMoves.emplace_back(view, army);
+  }
+
+  void CSyncRouter::RequestResync(const std::size_t view)
+  {
+    mResyncs.push_back(view);
+  }
+
+  void CSyncRouter::SetFocusFromLua(const std::int32_t army)
+  {
+    // The server's own filter stays -1. A call with no view's focus set has no client to move.
+    if (!mFrames.empty() && mFrames.back().view >= 0) {
+      MoveView(static_cast<std::size_t>(mFrames.back().view), army);
+    }
+  }
+
+  void CSyncRouter::ApplyMovesAndResyncs(moho::Sim& sim)
+  {
+    const auto toLuaArmy = [](const std::int32_t army) { return army == -1 ? -1 : army + 1; };
+    for (const auto& [view, army] : mMoves) {
+      SPlayerSync& player = mPlayers[view];
+      const std::int32_t previous = player.army;
+      if (previous == army) {
+        continue;
+      }
+      player.army = army;
+      const moho::CArmyImpl* const focused =
+        army >= 0 && static_cast<std::size_t>(army) < sim.mArmiesList.size() ? sim.mArmiesList[static_cast<std::size_t>(army)] : nullptr;
+      player.sourceOnFocus = focused != nullptr && player.source >= 0
+                             && focused->mVarDat.mValidCommandSources.Contains(static_cast<unsigned int>(player.source));
+      SViewScope scope(*this, sim, static_cast<std::int32_t>(view));
+      try {
+        // What `Sim::Sync` calls when a lockstep client's focus changes.
+        const LuaPlus::LuaFunction<> note(sim.mLuaState->GetGlobal("NoteFocusArmyChanged"));
+        note.Call_Int2(toLuaArmy(army), toLuaArmy(previous));
+      } catch (const std::exception& error) {
+        gpg::Warnf("sync routing: NoteFocusArmyChanged failed: %s", error.what());
+      }
+    }
+    mMoves.clear();
+
+    for (const std::size_t view : mResyncs) {
+      SViewScope scope(*this, sim, static_cast<std::int32_t>(view));
+      try {
+        // The parts of `OnPostLoad` (`lua/simInit.lua:565`) that write only `Sync`: the others fork
+        // threads or re-add objectives, which stay as they are for everyone else.
+        for (const char* const module : {"/lua/sim/simuistate.lua", "/lua/simdialogue.lua"}) {
+          const LuaPlus::LuaFunction<> onPostLoad(moho::SCR_Import(sim.mLuaState, module)["OnPostLoad"]);
+          onPostLoad();
+        }
+        // `simInit` also imports `/lua/simsync.lua`, a second copy of what `doscript` already ran
+        // (`:5`), whose `UnitData` and `Sync` are empty and its own. The live ones are the globals, and
+        // the global `NoteFocusArmyChanged` sends the view's unit data and allies' enhancements, the
+        // latter replacing `simuistate`'s every unit's, and its pings and recall votes.
+        const std::int32_t army = toLuaArmy(mPlayers[view].army);
+        const LuaPlus::LuaFunction<> note(sim.mLuaState->GetGlobal("NoteFocusArmyChanged"));
+        note.Call_Int2(army, army);
+      } catch (const std::exception& error) {
+        gpg::Warnf("sync routing: a view's resync failed: %s", error.what());
+      }
+    }
+    mResyncs.clear();
+  }
+
   void CSyncRouter::EnterCommand(moho::Sim& sim)
   {
-    EnterView(sim, SourceArmy(sim));
+    EnterView(sim, SourceView(sim));
   }
 
   void CSyncRouter::EnterSimOwn(moho::Sim& sim)
@@ -540,14 +914,58 @@ namespace faf::remote
     }
   }
 
-  bool CSyncRouter::Print(const msvc8::string& line)
+  void CSyncRouter::OnThreadForked(lua_State* const parent, lua_State* const thread)
   {
-    const std::int32_t view = FocusForLua();
-    if (view < 0) {
+    if (mForkingRecallVote && lua_gettop(parent) >= 2 && lua_isnumber(parent, 2)) {
+      const std::int32_t view = ViewOfArmy(static_cast<std::int32_t>(lua_tonumber(parent, 2)) - 1);
+      if (view >= 0) {
+        mThreadViews[thread] = view;
+      }
+      return;
+    }
+    if (mOwnedThreadFunctions.empty() || lua_gettop(parent) < 2 || !lua_istable(parent, 2)
+        || std::find(mOwnedThreadFunctions.begin(), mOwnedThreadFunctions.end(), lua_topointer(parent, 1)) == mOwnedThreadFunctions.end()) {
+      return;
+    }
+    const std::int32_t view = ViewOfArmy(ArmyOfSelf(parent, 2) - 1);
+    if (view >= 0) {
+      mThreadViews[thread] = view;
+    }
+  }
+
+  bool CSyncRouter::EnterThread(lua_State* const thread)
+  {
+    const auto found = mThreadViews.find(thread);
+    if (found == mThreadViews.end() || mSim == nullptr) {
       return false;
     }
-    mPlayers[static_cast<std::size_t>(view)].nextPrints.emplace_back(line.c_str());
+    EnterView(*mSim, found->second);
     return true;
+  }
+
+  void CSyncRouter::LeaveThread()
+  {
+    LeaveView(*mSim);
+  }
+
+  void CSyncRouter::OnThreadEnded(lua_State* const thread)
+  {
+    mThreadViews.erase(thread);
+  }
+
+  bool CSyncRouter::Print(const fa::string& line)
+  {
+    if (mFrames.empty() || mFrames.back().view < 0) {
+      return false;
+    }
+    mPlayers[static_cast<std::size_t>(mFrames.back().view)].nextPrints.emplace_back(line.c_str());
+    return true;
+  }
+
+  bool CSyncRouter::WroteUnderFocus(const std::size_t view, const char* const key) const
+  {
+    const SPlayerSync& player = mPlayers[view];
+    return player.contextUsed && player.context.IsTable() && !const_cast<LuaPlus::LuaObject&>(player.context)[key].IsNil();
   }
 
   void CSyncRouter::InstallWrappers(moho::Sim& sim)
@@ -556,6 +974,65 @@ namespace faf::remote
     LuaPlus::LuaState* const luaState = sim.mLuaState;
     lua_State* const state = luaState->m_state;
     LuaPlus::LuaObject globals = luaState->GetGlobals();
+
+    for (const SOwnedThread& owned : kOwnedThreads) {
+      LuaPlus::LuaObject owner = moho::SCR_Import(luaState, owned.module);
+      if (owner.IsTable()) {
+        owner = owner[owned.className];
+      }
+      LuaPlus::LuaObject function = owner.IsTable() ? owner[owned.function] : LuaPlus::LuaObject{};
+      if (function.IsFunction()) {
+        mOwnedThreadFunctions.push_back(function.m_object.value.p);
+      } else {
+        gpg::Warnf("sync routing: no %s.%s for its thread to follow", owned.className, owned.function);
+      }
+    }
+    // Before the wrappers go on: these two are called as they are. A session starts with every
+    // client's status to send (`init`, `lua/sim/Recall.lua:32`).
+    LuaPlus::LuaObject recall = moho::SCR_Import(luaState, "/lua/sim/recall.lua");
+    if (recall.IsTable()) {
+      mRecallCooldown = recall["ArmyRecallRequestCooldown"];
+      mRecallCannot = recall["SyncCannotRequestRecall"];
+      for (SPlayerSync& player : mPlayers) {
+        player.recallStatusTick = static_cast<std::int64_t>(sim.mCurTick) + 1;
+      }
+    }
+    LuaPlus::LuaObject brains = globals["ArmyBrains"];
+    if (brains.IsTable()) {
+      for (LuaPlus::LuaTableIterator entry(brains, 1); !entry.m_isDone; entry.Next()) {
+        LuaPlus::LuaObject brain = entry.GetValue();
+        if (!brain.IsTable()) {
+          continue;
+        }
+        LuaPlus::LuaObject armyField = brain["Army"];
+        const std::int32_t view = armyField.IsNumber() ? ViewOfArmy(static_cast<std::int32_t>(armyField.GetNumber()) - 1) : -1;
+        if (view < 0) {
+          continue;
+        }
+        for (const char* const field : kOwnedThreadFields) {
+          LuaPlus::LuaObject thread = brain[field];
+          if (thread.Type() == LUA_TTHREAD) {
+            mThreadViews[static_cast<lua_State*>(thread.m_object.value.p)] = view;
+          }
+        }
+      }
+    }
+
+    LuaPlus::LuaObject getVersion = moho::SCR_Import(luaState, "/lua/version.lua")["GetVersion"];
+    if (getVersion.IsFunction()) {
+      const int top = lua_gettop(state);
+      getVersion.PushStack(state);
+      lua_call(state, 0, 1);
+      const char* const version = lua_isstring(state, -1) ? lua_tostring(state, -1) : nullptr;
+      if (version == nullptr || kSyncPolicyGameVersion != version) {
+        gpg::Warnf(
+          "sync routing: the policy was audited on FAF game version %.*s, not %s: keys new since then go to observers only",
+          static_cast<int>(kSyncPolicyGameVersion.size()), kSyncPolicyGameVersion.data(), version != nullptr ? version : "(none)"
+        );
+      }
+      lua_settop(state, top);
+    }
+
     LuaPlus::LuaObject modules = globals["__modules"];
     for (const SWrappedFunction& wrapped : kWrapped) {
       LuaPlus::LuaObject owner = wrapped.module != nullptr ? moho::SCR_Import(luaState, wrapped.module) : globals;
@@ -577,6 +1054,9 @@ namespace faf::remote
       LuaPlus::LuaObject thunk(luaState, -1);
       lua_settop(state, top);
       owner.SetObject(wrapped.name, thunk);
+      if (wrapped.thunk == &RecallResyncThunk) {
+        mRecallResync = thunk;
+      }
 
       // Classes copy their base's functions when they are made, so the classes that exist already
       // hold the original. Those made from now on copy the wrapper.
@@ -603,14 +1083,145 @@ namespace faf::remote
 
   bool CSyncRouter::Allied(const moho::Sim& sim, const std::size_t view, const std::int32_t army) const
   {
-    if (army < 0 || view >= sim.mArmiesList.size()) {
+    const std::int32_t focus = view < mPlayers.size() ? mPlayers[view].army : -1;
+    if (army < 0 || focus < 0 || static_cast<std::size_t>(focus) >= sim.mArmiesList.size()) {
       return false;
     }
-    if (view == static_cast<std::size_t>(army)) {
+    if (focus == army) {
       return true;
     }
-    const moho::CArmyImpl* const candidate = sim.mArmiesList[view];
+    const moho::CArmyImpl* const candidate = sim.mArmiesList[static_cast<std::size_t>(focus)];
     return candidate != nullptr && candidate->mVarDat.mAllies.Contains(static_cast<unsigned int>(army));
+  }
+
+  void CSyncRouter::RunRecallStatus(moho::Sim& sim)
+  {
+    if (!mRecallCooldown.IsFunction() || !mRecallCannot.IsFunction()) {
+      return;
+    }
+    lua_State* const state = sim.mLuaState->m_state;
+    const auto tick = static_cast<std::int64_t>(sim.mCurTick);
+    for (std::size_t view = 0; view < mPlayers.size(); ++view) {
+      SPlayerSync& player = mPlayers[view];
+      if (player.recallStatusTick < 0 || player.recallStatusTick > tick) {
+        continue;
+      }
+      player.recallStatusTick = -1;
+      if (player.army < 0) {
+        continue;
+      }
+      // `SyncRecallStatusThread` (`lua/sim/Recall.lua:471`): the status, and when to look again.
+      SViewScope scope(*this, sim, static_cast<std::int32_t>(view));
+      const int top = lua_gettop(state);
+      try {
+        mRecallCooldown.PushStack(state);
+        lua_pushnumber(state, static_cast<float>(player.army + 1));
+        lua_call(state, 1, 2);
+        if (lua_isnumber(state, -1)) {
+          player.recallStatusTick = tick + std::max<std::int64_t>(1, static_cast<std::int64_t>(lua_tonumber(state, -1)));
+        }
+        mRecallCannot.PushStack(state);
+        lua_pushvalue(state, top + 1);
+        lua_call(state, 1, 0);
+      } catch (const std::exception& error) {
+        gpg::Warnf("sync routing: a view's recall status failed: %s", error.what());
+      }
+      lua_settop(state, top);
+    }
+  }
+
+  void CSyncRouter::RouteReclaim(moho::Sim& sim, LuaPlus::LuaObject& key, LuaPlus::LuaObject& value)
+  {
+    // The map's own props label themselves when they are made, before the first beat is over.
+    const bool first = sim.mCurBeat <= 1u;
+    const std::uint32_t everyView = mPlayers.size() >= 32u ? 0xFFFFFFFFu : (std::uint32_t{1} << mPlayers.size()) - 1u;
+    if (value.IsTable()) {
+      for (LuaPlus::LuaTableIterator entry(value, 1); !entry.m_isDone; entry.Next()) {
+        LuaPlus::LuaObject entryKey = entry.GetKey();
+        LuaPlus::LuaObject entryValue = entry.GetValue();
+        mScratch.clear();
+        Encode(entryKey, mScratch);
+        Encode(entryValue, mScratch);
+        std::uint32_t id = 0;
+        if (first || !ParseId(entryKey, id)) {
+          if (ParseId(entryKey, id)) {
+            mReclaimFirst.push_back(id);
+          }
+          for (SPlayerSync& view : mPlayers) {
+            view.keyBody.insert(view.keyBody.end(), mScratch.begin(), mScratch.end());
+          }
+          continue;
+        }
+        SReclaimLabel& label = mReclaim[id];
+        if (label.entry.empty() && !label.listed && label.delivered == 0u && !label.gone) {
+          if (!mReclaimFirstSorted) {
+            std::sort(mReclaimFirst.begin(), mReclaimFirst.end());
+            mReclaimFirstSorted = true;
+          }
+          if (std::binary_search(mReclaimFirst.begin(), mReclaimFirst.end(), id)) {
+            label.delivered = everyView;
+          }
+        }
+        label.entry = mScratch;
+        label.fresh = true;
+        label.gone = !entryValue.IsTable();
+        if (!label.gone) {
+          LuaPlus::LuaObject position = entryValue["position"];
+          if (position.IsTable()) {
+            label.x = static_cast<float>(position[1].GetNumber());
+            label.y = static_cast<float>(position[2].GetNumber());
+            label.z = static_cast<float>(position[3].GetNumber());
+          }
+        }
+        // A wreck that goes before a view saw it was never there for that view.
+        label.pending = label.gone ? label.delivered : everyView;
+        if (label.pending == 0u) {
+          if (!label.listed) {
+            mReclaim.erase(id);
+          }
+          continue;
+        }
+        if (!label.listed) {
+          label.listed = true;
+          mReclaimPending.push_back(id);
+        }
+      }
+    }
+
+    // What views may have now. A label still waiting is looked at every few beats: a player doesn't
+    // tell a label's delay from a tenth of a second or so, and there can be many of them.
+    const auto beat = static_cast<std::uint32_t>(sim.mCurBeat);
+    for (std::size_t i = 0; i < mReclaimPending.size();) {
+      const std::uint32_t id = mReclaimPending[i];
+      SReclaimLabel& label = mReclaim[id];
+      if (label.fresh || ((id + beat) & 3u) == 0u) {
+        const Wm3::Vec3f position{label.x, label.y, label.z};
+        for (std::size_t view = 0; view < mPlayers.size() && view < 32u; ++view) {
+          const std::uint32_t bit = std::uint32_t{1} << view;
+          if ((label.pending & bit) != 0u
+              && (ViewCanSeePoint(sim, mPlayers[view].army, position, false) || ViewCanSeePoint(sim, mPlayers[view].army, position, true))) {
+            mPlayers[view].keyBody.insert(mPlayers[view].keyBody.end(), label.entry.begin(), label.entry.end());
+            label.pending &= ~bit;
+            label.delivered |= bit;
+          }
+        }
+        label.fresh = false;
+      }
+      if (label.pending == 0u) {
+        label.listed = false;
+        if (label.gone) {
+          mReclaim.erase(id);
+        } else {
+          label.entry.clear();
+          label.entry.shrink_to_fit();
+        }
+        mReclaimPending[i] = mReclaimPending.back();
+        mReclaimPending.pop_back();
+        continue;
+      }
+      ++i;
+    }
+    CloseKey(key, "Reclaim");
   }
 
   void CSyncRouter::CloseKey(LuaPlus::LuaObject& key, const std::string_view name)
@@ -662,7 +1273,12 @@ namespace faf::remote
         continue;
       }
       const moho::Entity* const entity = sim.mEntityDB != nullptr ? sim.mEntityDB->FindEntityById(id) : nullptr;
-      std::int32_t owner = entity != nullptr ? entity->GetArmyIndex() : -1;
+      // A dead unit's id still says whose it was. A lockstep client gets every unit's death (`false`
+      // here, `lua/sim/Unit.lua:2167-2173`) whether it ever saw the unit or not; a player has nothing
+      // under another army's id to clear, so that stays with the owner.
+      std::int32_t owner = entity != nullptr                                                      ? entity->GetArmyIndex()
+                           : moho::ClassifyEntityIdFamily(id) == moho::EEntityIdFamily::Unit ? moho::ExtractEntityIdSourceIndex(id)
+                                                                                                : -1;
       if (route == ESyncRoute::EntityOwner) {
         const auto found = ownerEntry(id);
         if (found != mOwners.end() && found->first == id) {
@@ -682,7 +1298,7 @@ namespace faf::remote
       Encode(entryValue, mScratch);
       for (std::size_t index = 0; index < mPlayers.size(); ++index) {
         const bool wanted = route == ESyncRoute::EntityAllies ? Allied(sim, index, owner)
-                                                              : (owner < 0 || static_cast<std::size_t>(owner) == index);
+                                                              : (owner < 0 || mPlayers[index].army == owner);
         if (!wanted) {
           continue;
         }
@@ -711,6 +1327,7 @@ namespace faf::remote
     }
     LuaPlus::LuaObject scoreOption = options.IsTable() ? options["Score"] : LuaPlus::LuaObject{};
     const bool hidden = !scoreOption.IsString() || std::strcmp(scoreOption.GetString(), "no") == 0;
+    LuaPlus::LuaObject brains = sim.mLuaState->GetGlobals()["ArmyBrains"];
 
     for (LuaPlus::LuaTableIterator entry(value, 1); !entry.m_isDone; entry.Next()) {
       LuaPlus::LuaObject entryKey = entry.GetKey();
@@ -734,7 +1351,10 @@ namespace faf::remote
       const moho::CArmyImpl* const scoreArmy =
         army >= 0 && static_cast<std::size_t>(army) < sim.mArmiesList.size() ? sim.mArmiesList[static_cast<std::size_t>(army)] : nullptr;
       LuaPlus::LuaObject defeated = entryValue["Defeated"];
-      const bool isDefeated = !defeated.IsNil() || (scoreArmy != nullptr && scoreArmy->mVarDat.mIsOutOfGame != 0u);
+      LuaPlus::LuaObject status = brains.IsTable() ? brains[static_cast<int32_t>(army + 1)] : LuaPlus::LuaObject{};
+      status = status.IsTable() ? status["Status"] : LuaPlus::LuaObject{};
+      const bool isDefeated = !defeated.IsNil() || (scoreArmy != nullptr && scoreArmy->mVarDat.mIsOutOfGame != 0u)
+                              || (status.IsString() && (std::strcmp(status.GetString(), "Defeat") == 0 || std::strcmp(status.GetString(), "Recalled") == 0));
       std::vector<std::uint8_t> shortForm;
       if (isDefeated) {
         AppendString(shortForm, "Defeated");
@@ -838,7 +1458,7 @@ namespace faf::remote
       std::vector<std::uint8_t>& out = mPlayers[index].keyBody;
       out.insert(out.end(), mScratch.begin(), mScratch.end());
       AppendString(out, "focusArmyIndex");
-      AppendNumber(out, static_cast<float>(index + 1u));
+      AppendNumber(out, static_cast<float>(mPlayers[index].army < 0 ? -1 : mPlayers[index].army + 1));
     }
     CloseKey(key, "ScoreAccum");
   }
@@ -863,6 +1483,9 @@ namespace faf::remote
           return;
         case ESyncRoute::Score:
           RouteScore(sim, key, value);
+          return;
+        case ESyncRoute::Reclaim:
+          RouteReclaim(sim, key, value);
           return;
         case ESyncRoute::NukeLaunch:
           RouteNukes(sim, key, value);
@@ -914,6 +1537,11 @@ namespace faf::remote
     if (!mWrappersInstalled) {
       InstallWrappers(sim);
     }
+    FollowCommandSources(sim);
+    if (!mMoves.empty() || !mResyncs.empty()) {
+      ApplyMovesAndResyncs(sim);
+    }
+    RunRecallStatus(sim);
     for (SPlayerSync& view : mPlayers) {
       view.body.clear();
       view.keyBody.clear();
@@ -934,7 +1562,13 @@ namespace faf::remote
         for (LuaPlus::LuaTableIterator entry(view.context, 1); !entry.m_isDone; entry.Next()) {
           LuaPlus::LuaObject key = entry.GetKey();
           LuaPlus::LuaObject value = entry.GetValue();
-          if (!key.IsString() || (syncTable.IsTable() && !syncTable[key.GetString()].IsNil())) {
+          if (!key.IsString()) {
+            continue;
+          }
+          // A key the sim's own table has too came with `RouteKey`, unless that key stops there: a
+          // key for observers, which this view's own table may still have an entry of for it.
+          bool known = false;
+          if (syncTable.IsTable() && !syncTable[key.GetString()].IsNil() && RouteOfSyncKey(key.GetString(), known) != ESyncRoute::Observers) {
             continue;
           }
           Encode(key, view.body);
@@ -967,9 +1601,14 @@ namespace faf::remote
     for (SPlayerSync& view : mPlayers) {
       view.prints.swap(view.nextPrints);
       view.nextPrints.clear();
-      for (const msvc8::string& line : packet.mPrintField) {
+      for (const fa::string& line : packet.mPrintField) {
         view.prints.emplace_back(line.c_str());
       }
+    }
+
+    // The beat's payloads and print lines are all there (a server sends them now, plan WP11 `LuaSync`).
+    if (mPayloadObserver) {
+      mPayloadObserver(sim);
     }
 
     // The views' own tables are emptied as `Sync` is, by the game's own function.

@@ -13,7 +13,7 @@ namespace gpg::gal
   extern bool gPlacedResources;
 
   /**
-   * Engine addition: megabytes of idle Direct3D 12 upload pages kept for reuse; idle pages past it
+   * Engine addition: megabytes of idle Direct3D 12 and Vulkan upload pages kept for reuse; idle pages past it
    * are given back. Each page is 8 MB of committed process memory, and a burst (a loading screen, a
    * terrain normal-map rebuild) would otherwise leave them mapped. Console variable
    * `d3d_UploadIdleMB` (moho), read at each retire.
@@ -33,4 +33,12 @@ namespace gpg::gal
    * won't lock again (Device::ReleaseBufferCopy). Console variable `ren_ReleaseBufferCopies` (moho).
    */
   extern bool gReleaseBufferCopies;
+
+  /**
+   * Engine addition: Direct3D 12 and Vulkan rename a dynamic buffer into upload memory by copying
+   * all of it, as draws may read past what a lock wrote. An owner that says it doesn't
+   * (Device::CopyLockedRangeOnly) has only the locked bytes copied: the prim batcher's 0x8000 vertices
+   * for each flush were 11 % of an uncapped frame. Console variable `ren_LockedRangeOnly` (moho).
+   */
+  extern bool gLockedRangeOnly;
 } // namespace gpg::gal
