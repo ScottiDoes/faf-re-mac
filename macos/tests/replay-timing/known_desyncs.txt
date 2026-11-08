@@ -1,0 +1,5 @@
+# Replays in the replay-pack-3840 set that desynced when they were played live: the sim matches
+# at least as many players as differ, on every machine tried (Mac Studio M2 Max, GitHub's M1).
+28069186  # scmp_012, 1 of 2 players differ from beat 300
+28075346  # dualgap_adaptive.v0014, 2 of 12 differ at beat 21700 only
+28077216  # dualgap_adaptive.v0014, 5 of 12 differ from beat 17750
