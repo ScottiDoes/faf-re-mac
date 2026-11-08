@@ -24,6 +24,9 @@
 #   OUT                          folder for the app, the disk image and the zip (default build/dist)
 #   JOBS                         parallel compile jobs (default: all cores)
 #   FAF_BUILD_OWN_TOOLS=1        fetch CMake and Ninja even if this Mac has them (to test that path)
+#   TARGETS                      what to build in build/release (default faf_game)
+#   NO_APP=1                     stop after the build: no app, disk image or zip (CI builds
+#                                faf_replay this way, TARGETS=faf_replay)
 set -eu
 autoload -U is-at-least
 root=${0:A:h:h}
@@ -228,10 +231,12 @@ run game-configure "$CMAKE" -S "$root/macos" -B "$game_build" -G Ninja -DCMAKE_B
     -DCMAKE_PREFIX_PATH="$prefix" -DSDL3_DIR="$prefix/lib/cmake/SDL3" -DFAudio_DIR="$prefix/lib/cmake/FAudio" \
     -DFAF_VULKAN_SDK="$sdk"
 note "compiling (the first time takes a while; progress every 10%)"
-"$CMAKE" --build "$game_build" --target faf_game -j "$jobs" 2>&1 | tee "$logs/game-build.log" |
+"$CMAKE" --build "$game_build" --target ${=TARGETS:-faf_game} -j "$jobs" 2>&1 | tee "$logs/game-build.log" |
     awk '/^\[[0-9]+\/[0-9]+\]/ { split(substr($1, 2), n, /[\/\]]/); p = int(n[1] * 10 / n[2]) * 10
                                  if (p > shown) { shown = p; printf "    %d%%\n", p; fflush() } }'
 (( pipestatus[1] == 0 )) || { grep -m 20 -E 'error|FAILED' "$logs/game-build.log" >&2; fail "the game did not build (macos/vendor/logs/game-build.log)"; }
+
+[[ ${NO_APP:-0} != 1 ]] || { print "Done: $game_build (${TARGETS:-faf_game}); NO_APP=1, so no app."; exit 0 }
 
 # ---------------------------------------------------------------------------------------------
 step "The app"
