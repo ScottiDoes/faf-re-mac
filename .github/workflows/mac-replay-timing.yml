@@ -1,0 +1,106 @@
+name: Mac replay timing
+# Plays the replay-timing set (macos/tests/replay-timing) on GitHub's Apple silicon Macs and
+# times it, to compare with a Mac at home. One job builds faf_replay; five jobs (the free plan's
+# limit for Mac runners) each play a fifth of the set from the encrypted pack on the
+# replay-pack-<version> release; the last one adds up their times. Run it by hand from the
+# Actions tab. Needs the MAC_PACK_KEY secret (the pack's passphrase).
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: Replays played at a time on each runner
+        default: "3"
+      pack_tag:
+        description: Release that holds mac-replay-pack.tar.zst.enc
+        default: replay-pack-3840
+      runner:
+        description: Runner image
+        default: macos-15
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      # The pinned downloads only (SDL3, FAudio, the Vulkan SDK, CMake, Ninja, Boost); every
+      # build step runs again, as its stamps describe trees that are not cached.
+      - uses: actions/cache@v4
+        with:
+          path: macos/vendor/downloads
+          key: mac-vendor-downloads-${{ hashFiles('macos/vendor/versions.sh') }}
+      - name: Build faf_replay
+        run: |
+          start=$(date +%s)
+          ACCEPT_VULKAN_SDK_LICENSE=1 NO_APP=1 TARGETS=faf_replay macos/build_app.sh
+          echo "build_s=$(( $(date +%s) - start ))" >> "$GITHUB_STEP_SUMMARY"
+      # faf_replay finds SDL3 and FAudio through an absolute rpath into macos/vendor/prefix/lib;
+      # every runner checks out to the same path, so the play jobs put them back there.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: faf_replay
+          path: |
+            build/release/faf_replay
+            macos/vendor/prefix/lib/*.dylib
+          retention-days: 3
+
+  play:
+    needs: build
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: faf_replay
+      - name: Get the pack
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAC_PACK_KEY: ${{ secrets.MAC_PACK_KEY }}
+        run: |
+          chmod +x build/release/faf_replay
+          command -v zstd || brew install zstd
+          gh release download "${{ inputs.pack_tag }}" -R "$GITHUB_REPOSITORY" -p mac-replay-pack.tar.zst.enc -D "$RUNNER_TEMP"
+          mkdir "$RUNNER_TEMP/pack"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:MAC_PACK_KEY \
+              -in "$RUNNER_TEMP/mac-replay-pack.tar.zst.enc" | zstd -d -q | tar -x -C "$RUNNER_TEMP/pack"
+          rm "$RUNNER_TEMP/mac-replay-pack.tar.zst.enc"
+          # The engine's hook folder, as macos/make_run_folder.sh links it.
+          ln -s "$GITHUB_WORKSPACE/data/fafengine" "$RUNNER_TEMP/pack/bin/fafengine"
+      - name: Play shard ${{ matrix.shard }} of 5
+        env:
+          FAF_RUN_DIR: ${{ runner.temp }}/pack/bin
+          FAF_REPLAY_EXE: ${{ github.workspace }}/build/release/faf_replay
+        run: |
+          python3 -I macos/tests/replay-timing/run_set.py --replays "$RUNNER_TEMP/pack/replays" \
+              --list "$RUNNER_TEMP/pack/replays/selected.json" --shard ${{ matrix.shard }}/5 \
+              --jobs ${{ inputs.jobs }} --out results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.shard }}
+          path: |
+            results/results.json
+            results/runs/*/run.txt
+            results/runs/*/*.result
+          retention-days: 14
+
+  report:
+    needs: play
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: macos/tests/replay-timing
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+      - run: python3 -I macos/tests/replay-timing/report.py results-*/results.json >> "$GITHUB_STEP_SUMMARY"
