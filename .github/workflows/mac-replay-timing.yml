@@ -2,9 +2,17 @@ name: Mac replay timing
 # Plays the replay-timing set (macos/tests/replay-timing) on GitHub's Apple silicon Macs and
 # times it, to compare with a Mac at home. One job builds faf_replay; five jobs (the free plan's
 # limit for Mac runners) each play a fifth of the set from the encrypted pack on the
-# replay-pack-<version> release; the last one adds up their times. Run it by hand from the
-# Actions tab. Needs the MAC_PACK_KEY secret (the pack's passphrase).
+# replay-pack-<version> release; the last one adds up their times and fails the run when a
+# replay other than the known desyncs (macos/tests/replay-timing/known_desyncs.txt) does not pass.
+# Runs on every push to macos-native that can reach the sim, and by hand from the Actions tab.
+# Needs the MAC_PACK_KEY secret (the pack's passphrase).
 on:
+  push:
+    branches: [macos-native]
+    paths-ignore:
+      - "**.md"
+      - "macos/docs/**"
+      - "macos/app/**"
   workflow_dispatch:
     inputs:
       jobs:
@@ -20,9 +28,19 @@ on:
 permissions:
   contents: read
 
+# A newer push replaces a run still going on the same branch.
+concurrency:
+  group: mac-replay-${{ github.ref }}
+  cancel-in-progress: true
+
+# Push runs have no inputs, so each falls back to the dispatch default.
+env:
+  JOBS: ${{ inputs.jobs || '3' }}
+  PACK_TAG: ${{ inputs.pack_tag || 'replay-pack-3840' }}
+
 jobs:
   build:
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +67,7 @@ jobs:
 
   play:
     needs: build
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -67,7 +85,7 @@ jobs:
         run: |
           chmod +x build/release/faf_replay
           command -v zstd || brew install zstd
-          gh release download "${{ inputs.pack_tag }}" -R "$GITHUB_REPOSITORY" -p mac-replay-pack.tar.zst.enc -D "$RUNNER_TEMP"
+          gh release download "$PACK_TAG" -R "$GITHUB_REPOSITORY" -p mac-replay-pack.tar.zst.enc -D "$RUNNER_TEMP"
           mkdir "$RUNNER_TEMP/pack"
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:MAC_PACK_KEY \
               -in "$RUNNER_TEMP/mac-replay-pack.tar.zst.enc" | zstd -d -q | tar -x -C "$RUNNER_TEMP/pack"
@@ -81,7 +99,7 @@ jobs:
         run: |
           python3 -I macos/tests/replay-timing/run_set.py --replays "$RUNNER_TEMP/pack/replays" \
               --list "$RUNNER_TEMP/pack/replays/selected.json" --shard ${{ matrix.shard }}/5 \
-              --jobs ${{ inputs.jobs }} --out results
+              --jobs "$JOBS" --out results
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -103,4 +121,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: results-*
-      - run: python3 -I macos/tests/replay-timing/report.py results-*/results.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Report
+        run: |
+          status=0
+          python3 -I macos/tests/replay-timing/report.py \
+              --known-desyncs macos/tests/replay-timing/known_desyncs.txt \
+              results-*/results.json > report.md || status=$?
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          exit $status
