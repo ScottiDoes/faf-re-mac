@@ -37,3 +37,11 @@ NINJA_SHA256=c99048673aa765960a99cf10c6ddb9f1fad506099ff0a0e137ad8960a88f321b
 # Boost 1.34.1 (engine source dependency; the same pin as cmake/FafDependencies.cmake).
 BOOST_URL=https://downloads.sourceforge.net/project/boost/boost/1.34.1/boost_1_34_1.tar.bz2
 BOOST_SHA256=0f866c75b025a4f1340117a106595cc0675f48ba1e5a9b5c221ec7f19e96ec4c
+
+# Zstandard and Monocypher (returning players' saves and rejoin keys; the net channel): the same
+# pins as cmake/FafDependencies.cmake. Source archives, compiled by macos/deps.cmake.
+ZSTD_URL=https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+ZSTD_SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+MONOCYPHER_URL=https://github.com/LoupVaillant/Monocypher/archive/refs/tags/4.0.2.tar.gz
+MONOCYPHER_FILE=Monocypher-4.0.2.tar.gz
+MONOCYPHER_SHA256=bc1ca30b1b2654e4e7daf2492c0d204200e55137f23fda6b7142fd7d523bd6b4

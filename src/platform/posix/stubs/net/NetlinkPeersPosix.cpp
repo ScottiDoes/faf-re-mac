@@ -23,6 +23,18 @@ namespace moho
 
   void NETLINK_Shutdown() {}
 
+  bool NETLINK_ReconnectPeer(std::int64_t, const faf::netlink::PathChoice*)
+  {
+    return false;
+  }
+
+  SNetlinkSnapshot NETLINK_GetSnapshot()
+  {
+    return {};
+  }
+
+  void NETLINK_KeepLogLines() {}
+
   bool NATIVENET_Enabled()
   {
     return false;

@@ -41,7 +41,6 @@ namespace gpg::gal
   PipelineState::~PipelineState() = default;
 
   bool gPlacedResources = true;
-  int gUploadIdleMB = 32;
   bool gSharedBuffers = true;
   bool gPipelineDiskCache = true;
 } // namespace gpg::gal
