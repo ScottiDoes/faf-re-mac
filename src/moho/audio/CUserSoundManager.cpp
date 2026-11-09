@@ -718,7 +718,9 @@ namespace moho
       // The XACT engine is a free-threaded ("Both") COM object, made here in the process's
       // multithreaded apartment. The thread ends without CoUninitialize, so its hold keeps the
       // apartment up after it, for as long as the engines are used.
+#if !defined(FAF_POSIX)
       (void)::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+#endif
       tBuildingSound = true;
       IUserSoundManager* manager = nullptr;
       try {

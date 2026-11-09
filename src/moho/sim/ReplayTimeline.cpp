@@ -18,6 +18,10 @@
 #include <vector>
 
 #include <Windows.h>
+#if defined(FAF_POSIX)
+#include <cerrno>
+#include <signal.h>
+#endif
 #include <zstd.h>
 
 #include "boost/shared_ptr.h"
@@ -205,10 +209,14 @@ namespace moho
         const unsigned long owner = std::strtoul(entry.path().filename().string().c_str(), nullptr, 10);
         bool running = false;
         if (owner != 0u && owner != self) {
+#if defined(FAF_POSIX)
+          running = ::kill(static_cast<pid_t>(owner), 0) == 0 || errno == EPERM;
+#else
           if (HANDLE process = ::OpenProcess(SYNCHRONIZE, FALSE, owner); process != nullptr) {
             running = ::WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
             ::CloseHandle(process);
           }
+#endif
         }
         if (!running) {
           leftovers.push_back(entry.path());
@@ -524,6 +532,10 @@ namespace moho
     void StartKeyframePreparation()
     {
       sPrepareStartDue = false;
+#if defined(FAF_POSIX)
+      // No hidden process on macOS yet: keyframes are saved as the replay plays.
+      return;
+#else
       if (!replay_PrepareKeyframes || replay_KeyframeEvery <= 0) {
         return;
       }
@@ -578,6 +590,7 @@ namespace moho
         sCompressWake.notify_one();
       }
       gpg::Logf("Replay timeline: preparing keyframes ahead with a hidden %s", self.string().c_str());
+#endif
     }
 
     /** Takes in what the background thread has moved up from the hidden process: compressed like our own. */

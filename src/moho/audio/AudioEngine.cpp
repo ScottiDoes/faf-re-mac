@@ -587,6 +587,9 @@ namespace
    */
   [[nodiscard]] DWORD ResolveStreamingWaveBankOpenFlags(const char* const resolvedPath, const gpg::StrArg waveBankPath)
   {
+#if defined(FAF_POSIX)
+    return kStreamingWaveBankOpenFlags; // FACT reads the bank through its own file layer: no sector alignment
+#else
     const HANDLE file = ::CreateFileA(
       resolvedPath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr
     );
@@ -621,6 +624,7 @@ namespace
 
     (void)::CloseHandle(file);
     return openFlags;
+#endif
   }
 
   /**

@@ -97,12 +97,14 @@ namespace moho
         AddValue(hash, version.dwMajorVersion);
         AddValue(hash, version.dwMinorVersion);
         AddValue(hash, version.dwBuildNumber);
+#if !defined(FAF_POSIX)
         for (const UINT action : {SPI_GETFONTSMOOTHING, SPI_GETFONTSMOOTHINGTYPE, SPI_GETFONTSMOOTHINGCONTRAST,
                                   SPI_GETFONTSMOOTHINGORIENTATION}) {
           UINT value = 0;
           (void)SystemParametersInfoW(action, 0, &value, 0);
           AddValue(hash, value);
         }
+#endif
         return hash.Value();
       }();
       return sEnvironment;
@@ -290,6 +292,9 @@ namespace moho
     /// The identity of the font selected into `dc`: its face, text metrics and 'head' table.
     [[nodiscard]] std::uint64_t ComputeFontIdentity(HDC const dc)
     {
+#if defined(FAF_POSIX)
+      return 0; // no 'head' table through the Gdi compat area: these fonts aren't cached
+#else
       constexpr DWORD kHeadTable = 0x64616568u; // 'head'
       const DWORD headSize = GetFontData(dc, kHeadTable, 0, nullptr, 0);
       if (headSize == GDI_ERROR || headSize == 0 || headSize > 4096u) {
@@ -310,6 +315,7 @@ namespace moho
       AddValue(hash, metrics);
       hash.Add(head.data(), head.size());
       return hash.Value() | 1u; // never 0
+#endif
     }
 
     [[nodiscard]] std::uint64_t GlyphKey(const std::uint64_t font, const wchar_t character)

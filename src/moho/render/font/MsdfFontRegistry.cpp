@@ -1,3 +1,8 @@
+#if defined(FAF_POSIX)
+#include <cerrno>
+#include <signal.h>
+#endif
+
 #include "moho/render/font/MsdfFontRegistry.h"
 
 #include <algorithm>
@@ -181,6 +186,9 @@ namespace moho
 
     [[nodiscard]] bool IsProcessRunning(const unsigned long processId)
     {
+#if defined(FAF_POSIX)
+      return ::kill(static_cast<pid_t>(processId), 0) == 0 || errno == EPERM;
+#else
       const HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
       if (process == nullptr) {
         return false;
@@ -189,6 +197,7 @@ namespace moho
       const bool running = ::GetExitCodeProcess(process, &exitCode) != FALSE && exitCode == STILL_ACTIVE;
       ::CloseHandle(process);
       return running;
+#endif
     }
 
     /**
@@ -231,6 +240,11 @@ namespace moho
      */
     [[nodiscard]] std::shared_ptr<const SMsdfFontAtlas> LoadOrCook(const FontFile& file)
     {
+#if defined(FAF_POSIX)
+      // macOS doesn't build the cook yet (platform/posix/stubs/render/moho/MsdfFontCookPosix.cpp):
+      // no atlas, so text stays on the glyph bitmaps.
+      return nullptr;
+#endif
       SMsdfCookOptions options = file.mFromMod ? MSDF_MakeModCookOptions(kCookThreads) : MSDF_MakeCookOptions(kCookThreads);
       options.mCancel = &gCancelCooks;
       const char* const kind = file.mFromMod ? "mod font " : "";
