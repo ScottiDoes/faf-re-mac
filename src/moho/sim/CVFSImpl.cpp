@@ -723,12 +723,7 @@ namespace
     const moho::SVFSMountPoint* sourceBegin
   )
   {
-    while (sourceEnd != sourceBegin) {
-      --sourceEnd;
-      --destinationEnd;
-      *destinationEnd = *sourceEnd;
-    }
-    return destinationEnd;
+    return std::copy_backward(sourceBegin, sourceEnd, destinationEnd);
   }
 
   /**
@@ -887,6 +882,12 @@ namespace moho
     for (const SearchPathCandidate& candidate : searchCandidates) {
       AddSearchPath(mountPoint, candidate.mResolvedPath, candidate.mIsDirectory);
     }
+  }
+
+  void CVFSImpl::MountDirectoryLate(const std::filesystem::path& directory, const gpg::StrArg mountpoint)
+  {
+    const SVFSMountPoint point(directory.string().c_str(), mountpoint);
+    AddSearchPath(point, fa::string(directory.string().c_str()), true);
   }
 
   /**

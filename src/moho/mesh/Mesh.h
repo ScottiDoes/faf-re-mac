@@ -686,6 +686,12 @@ namespace moho
      */
     void UpdateInterpolatedFields();
 
+    /// Engine addition: whether UpdateInterpolatedFields would do work now (its early-out test, inverted).
+    [[nodiscard]] bool InterpolatedFieldsStale() const noexcept
+    {
+      return !(sCurrentInterpolant == currInterpolant || (frameCounter == sFrameCounter && interpolationStateFresh != 0u));
+    }
+
     /**
      * Address: 0x007DAE20 (FUN_007DAE20, Moho::MeshInstance::GetInterpolatedPos)
      *
@@ -1017,6 +1023,56 @@ namespace moho
   static_assert(offsetof(MeshShaderPaletteVar, mPalette) == 0x48, "MeshShaderPaletteVar::mPalette offset must be 0x48");
   static_assert(sizeof(MeshShaderPaletteVar) == 0x58, "MeshShaderPaletteVar size must be 0x58");
 
+  /**
+   * Engine addition (water bodies, .plans/water-levels/PLAN.md): with `set`, mirrored mesh passes
+   * (`MeshRenderer::Render` with flags 2) reflect at `elevation` instead of the sea, for a lake's
+   * reflection; without, at the sea as in the binary.
+   */
+  void MESH_SetMirrorElevation(bool set, float elevation) noexcept;
+
+  /**
+   * Engine addition (ren_ShadowCasterCull): the part of the world the shadow map shades this frame, the
+   * view frustum cut at the shadow distance (planes with outward normals, `n.x - constant > 0` outside)
+   * and the lowest terrain in it. While `active`, MeshRenderer::Batch drops a mesh whose bounding
+   * sphere, moved along the light down to that terrain, stays outside one of the planes: its shadow
+   * can't fall on anything in view. `margin` widens every sphere so the blur and the filter around a
+   * shadow's edge still see the casters just outside.
+   */
+  struct ShadowCasterRegion
+  {
+    static constexpr std::uint32_t kMaxPlanes = 8U;
+    bool active = false;
+    std::uint32_t planeCount = 0U;
+    float planes[kMaxPlanes][4]{}; // normal x, y, z, constant
+    float light[3]{};              // the direction the light travels, unit length, pointing down
+    float floorY = 0.0f;
+    float margin = 0.0f;
+
+    [[nodiscard]] bool MayShadow(const Wm3::Sphere3f& sphere) const noexcept
+    {
+      if (light[1] > -0.05f) {
+        return true; // a light this low reaches far; keep every caster
+      }
+      const float radius = sphere.Radius + margin;
+      const float drop = sphere.Center.y + radius - floorY;
+      const float reach = (drop > 0.0f ? drop : 0.0f) / -light[1];
+      for (std::uint32_t index = 0U; index < planeCount; ++index) {
+        const float* const plane = planes[index];
+        const float distance =
+          plane[0] * sphere.Center.x + plane[1] * sphere.Center.y + plane[2] * sphere.Center.z - plane[3];
+        const float along = plane[0] * light[0] + plane[1] * light[1] + plane[2] * light[2];
+        const float nearest = distance + (along < 0.0f ? reach * along : 0.0f);
+        if (nearest > radius) {
+          return false;
+        }
+      }
+      return true;
+    }
+  };
+
+  /// Set by Shadow::RenderShadowMap around its mesh batches; inactive otherwise.
+  extern ShadowCasterRegion gShadowCasterRegion;
+
   class MeshRenderer
   {
   public:
@@ -1153,6 +1209,24 @@ namespace moho
      * instance into the `(isStaticPose, sortOrder)` bucket.
      */
     void Batch(std::int32_t gameTick, float deltaFrame, const GeomCamera3& camera, const Vector4f& fadePlane);
+
+    /// Engine addition (ren_ShadowTileReuse): one bucket of a saved batch.
+    struct SavedBucket
+    {
+      MeshBatchKey key;
+      std::vector<MeshInstance*> instances;
+    };
+
+    /// Engine addition (ren_ShadowTileReuse): copies the non-empty buckets of `meshes`.
+    void SaveBatch(std::vector<SavedBucket>& out) const;
+
+    /**
+     * Engine addition (ren_ShadowTileReuse): what Batch gives for `camera` when an earlier Batch of the
+     * same frame used a camera volume holding all of `camera`'s and the same fade plane. Every gate in
+     * Batch but the last sphere test is the same for both, so the saved buckets filtered by that test
+     * (and the clutter's camera) are the same instances, without a second spatial query or LOD walk.
+     */
+    void BatchFromSaved(std::int32_t gameTick, float deltaFrame, const GeomCamera3& camera, const std::vector<SavedBucket>& saved);
 
     /**
      * Address: 0x007E11C0 (FUN_007E11C0,

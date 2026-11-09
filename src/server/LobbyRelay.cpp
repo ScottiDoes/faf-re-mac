@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "moho/net/ELobbyMsg.h"
 #include "remote/net/Datagram.h"
 #include "remote/net/GameLinks.h"
 
@@ -11,6 +12,9 @@ namespace faf::server
 {
   namespace
   {
+    // A `CLobby` message: its type, then its whole size in 16 bits (moho/net/CMessage.h), then the payload.
+    constexpr std::size_t kMessageHeaderBytes = 3u;
+
     /** A LEB128 uid at the start of `body`: its value and length, or false for none, one past 31 bits, or a long form. */
     [[nodiscard]] bool ReadUid(const std::span<const std::uint8_t> body, std::uint32_t& uid, std::size_t& length) noexcept
     {
@@ -102,21 +106,106 @@ namespace faf::server
     if (targetUid == from || !mSenders.contains(targetUid)) {
       return verdict(ELobbyRelayVerdict::UnknownTarget);
     }
+
+    // Plan WPR.49: what the relay reads of a `CLobby` message (type, 16-bit whole size, payload): its type.
+    const std::uint8_t type = message[0];
+    bool eject = false;
+    if (type == static_cast<std::uint8_t>(moho::ELobbyMsg::LOBMSG_Rejected) || type == static_cast<std::uint8_t>(moho::ELobbyMsg::LOBMSG_DeletePeer)) {
+      // Plan WP17.1: only a player-hosted lobby's current host ejects.
+      if (mControl != ELobbyControl::Player || mHost == 0 || from != mHost) {
+        return verdict(ELobbyRelayVerdict::EjectIgnored);
+      }
+      eject = true;
+    }
+    std::span<const std::uint8_t> forwarded = message;
+    const bool script = type == static_cast<std::uint8_t>(moho::ELobbyMsg::LOBMSG_BroadcastScriptData)
+                        || type == static_cast<std::uint8_t>(moho::ELobbyMsg::LOBMSG_DirectScriptData);
+    if (mControl == ELobbyControl::Organiser && from != mHost && script && message.size() > kMessageHeaderBytes) {
+      // Plan WP17.6: what the organiser set stays; a player chats, readies up and leaves.
+      mPayload.assign(message.begin() + kMessageHeaderBytes, message.end());
+      const EPlayerScript limited = LimitPlayerScript(mPayload);
+      if (limited == EPlayerScript::Refused) {
+        return verdict(ELobbyRelayVerdict::Locked);
+      }
+      if (limited == EPlayerScript::Rewritten) {
+        const std::size_t size = kMessageHeaderBytes + mPayload.size();
+        mPayload.insert(mPayload.begin(), {type, static_cast<std::uint8_t>(size), static_cast<std::uint8_t>(size >> 8u)});
+        forwarded = mPayload;
+        ++mPlayerOptionsLimited;
+      }
+    }
+    if (mControl == ELobbyControl::Organiser && !mPinned.empty() && forwarded.data() == message.data() && message.size() > kMessageHeaderBytes
+        && (type == static_cast<std::uint8_t>(moho::ELobbyMsg::LOBMSG_BroadcastScriptData)
+            || type == static_cast<std::uint8_t>(moho::ELobbyMsg::LOBMSG_DirectScriptData))) {
+      mPayload.assign(message.begin() + kMessageHeaderBytes, message.end());
+      if (PinGameOptions(mPayload, mPinned)) {
+        const std::size_t size = kMessageHeaderBytes + mPayload.size();
+        if (size > 0xFFFFu || size > mLimits.maxMessageBytes) {
+          return verdict(ELobbyRelayVerdict::TooLarge);
+        }
+        mPayload.insert(mPayload.begin(), {type, static_cast<std::uint8_t>(size), static_cast<std::uint8_t>(size >> 8u)});
+        forwarded = mPayload;
+        ++mOptionsPinned;
+      }
+    }
+
+    // Plan WP17.2: who sits in which lobby slot, as the host says it, and who is ready, as the PlayerOptions (after
+    // this relay's limits) say it.
+    if (script && forwarded.size() > kMessageHeaderBytes) {
+      const SLobbyFacts facts = ReadLobbyFacts(forwarded.subspan(kMessageHeaderBytes));
+      if (from == mHost) {
+        for (const auto& [owner, slot] : facts.seats) {
+          mLobbySlots[owner] = slot;
+        }
+      }
+      if (facts.ready) {
+        // A player sets only their own slot (lobby.lua refuses the rest); the host sets any (everyone's Ready goes
+        // false when the options change), so its message counts for the slot's owner.
+        std::int32_t owner = from;
+        if (from == mHost && facts.slot) {
+          const auto seated = std::find_if(mLobbySlots.begin(), mLobbySlots.end(), [&facts](const auto& entry) { return entry.second == *facts.slot; });
+          owner = seated == mLobbySlots.end() ? 0 : seated->first;
+        }
+        if (owner != 0) {
+          const auto [entry, added] = mReady.try_emplace(owner, *facts.ready);
+          if (added || entry->second != *facts.ready) {
+            entry->second = *facts.ready;
+            mReadyChanges.emplace_back(owner, *facts.ready);
+          }
+        }
+      }
+    }
     to = targetUid;
     out.clear();
     remote::net::ByteWriter writer(out);
     writer.Byte(static_cast<std::uint8_t>(remote::net::ESeatMessage::Lobby));
     writer.Varint(static_cast<std::uint64_t>(from));
-    writer.Bytes(message.data(), message.size());
-    return verdict(ELobbyRelayVerdict::Forward);
+    writer.Bytes(forwarded.data(), forwarded.size());
+    return verdict(eject ? ELobbyRelayVerdict::EjectForwarded : ELobbyRelayVerdict::Forward);
+  }
+
+  std::optional<ELobbyControl> ReadLobbyControl(const std::string_view text) noexcept
+  {
+    if (text == "organiser") {
+      return ELobbyControl::Organiser;
+    }
+    if (text == "player") {
+      return ELobbyControl::Player;
+    }
+    return std::nullopt;
   }
 
   std::vector<std::uint8_t> CLobbyRelay::FrameFromServer(const std::span<const std::uint8_t> message)
   {
+    return FrameFrom(0, message);
+  }
+
+  std::vector<std::uint8_t> CLobbyRelay::FrameFrom(const std::int32_t from, const std::span<const std::uint8_t> message)
+  {
     std::vector<std::uint8_t> out;
     remote::net::ByteWriter writer(out);
     writer.Byte(static_cast<std::uint8_t>(remote::net::ESeatMessage::Lobby));
-    writer.Varint(0u);
+    writer.Varint(static_cast<std::uint64_t>(from < 0 ? 0 : from));
     writer.Bytes(message.data(), message.size());
     return out;
   }

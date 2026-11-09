@@ -62,6 +62,7 @@
 #include "moho/terrain/StratumMaterial.h"
 #include "moho/terrain/splat/CWldSplat.h"
 #include "moho/terrain/water/CWaterShaderProperties.h"
+#include "moho/terrain/water/WaterBodySurfaces.h"
 #include "moho/terrain/water/WaveSystem.h"
 #include "platform/X87Precision.h"
 
@@ -369,10 +370,73 @@ namespace
    * preview chunk (0x008A30D8 writes the version, 0x008A3176 the sample scale).
    */
   constexpr std::int32_t kTerrainSaveVersion = 60;
+  /**
+   * Engine addition (water bodies, .plans/water-levels/PLAN.md): `RebuildWaterMapRect` for a map
+   * with bodies. Each texel takes the level and abyss of its own water (`WaterOfBlock`), so a
+   * lake gets its depth and shoreline as the sea does, and a dry body none. Only the texels
+   * `RebuildWaterMapRect` would write are written, with the same packing.
+   */
+  void RebuildWaterMapRectWithBodies(moho::CWldTerrainRes& terrainRes, const gpg::Rect2i& updateRect)
+  {
+    const moho::STIMap& map = *terrainRes.mMap;
+    const moho::CHeightField& field = *map.mHeightField.get();
+    const std::int32_t halfX0 = std::max(updateRect.x0, 0) >> 1;
+    const std::int32_t halfZ0 = std::max(updateRect.z0, 0) >> 1;
+    const std::int32_t halfX1 = std::min(updateRect.x1, field.width - 1) >> 1;
+    const std::int32_t halfZ1 = std::min(updateRect.z1, field.height - 1) >> 1;
+    const auto halfMapWidth = static_cast<std::uint32_t>(static_cast<std::uint32_t>(field.width - 1) >> 1u);
+    // The pixel buffer exists only between EnterEditMode and the end of the load; outside it
+    // there is nothing to write into (the caller enters edit mode first).
+    const auto texelCount = static_cast<std::size_t>(halfMapWidth) * static_cast<std::size_t>((field.height - 1) >> 1);
+    if (terrainRes.mEditWordBuffer.begin == nullptr || terrainRes.mWaterFoam == nullptr || terrainRes.mWaterFlatness == nullptr ||
+        static_cast<std::size_t>(terrainRes.mEditWordBuffer.capacityEnd - terrainRes.mEditWordBuffer.begin) < texelCount) {
+      gpg::Warnf("Water bodies: the water map has no pixel buffer to rebuild");
+      return;
+    }
+
+    for (std::int32_t halfZ = halfZ0; halfZ < halfZ1; ++halfZ) {
+      const std::int32_t worldZ = halfZ * 2;
+      for (std::int32_t halfX = halfX0; halfX < halfX1; ++halfX) {
+        const std::int32_t worldX = halfX * 2;
+        const std::uint32_t pixelIndex = static_cast<std::uint32_t>(halfX) + static_cast<std::uint32_t>(halfZ) * halfMapWidth;
+        const moho::SWaterOfBlock water = moho::WaterOfBlock(map, worldX, worldZ);
+
+        const float h00 = SampleTerrainHeightWordScaled(field, worldX, worldZ);
+        const float h10 = SampleTerrainHeightWordScaled(field, worldX + 2, worldZ);
+        const float h01 = SampleTerrainHeightWordScaled(field, worldX, worldZ + 2);
+        const float h11 = SampleTerrainHeightWordScaled(field, worldX + 2, worldZ + 2);
+
+        std::uint32_t packedSample = 0;
+        packedSample |= static_cast<std::uint32_t>(terrainRes.mWaterFoam[pixelIndex]) << 24u;
+        packedSample |= static_cast<std::uint32_t>(terrainRes.mWaterFlatness[pixelIndex]) << 16u;
+        // Unlike the sea-only map, a texel with any corner above its water gets no depth: the
+        // shaders sample this texture bilinearly, and the terrain shader's own test against a
+        // single WaterElevation (the highest level here) can't stop a shore texel's depth from
+        // colouring the bank above a lower water. Depth then fades out within the shore texel.
+        const float level = water.level;
+        const bool anyAbove = level < h00 || level < h10 || level < h01 || level < h11;
+        if (!anyAbove && (level > h00 || level > h10 || level > h01 || level > h11)) {
+          const float depthByte = std::clamp(((level - h00) / (level - water.abyss)) * 255.0f, 0.0f, 255.0f);
+          packedSample |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(depthByte)) << 8u;
+        }
+        if (anyAbove) {
+          packedSample |= 0xFFu;
+        }
+        terrainRes.mEditWordBuffer.begin[pixelIndex] = packedSample;
+      }
+    }
+
+    terrainRes.UpdateTexture(terrainRes.mWaterMapTexture, terrainRes.mEditWordBuffer.begin);
+  }
+
   void RebuildWaterMapRect(moho::CWldTerrainRes& terrainRes, const gpg::Rect2i& updateRect)
   {
     constexpr float kNoWaterElevation = -10000.0f;
     moho::STIMap* const map = terrainRes.mMap;
+    if (map->HasWaterBodies()) {
+      RebuildWaterMapRectWithBodies(terrainRes, updateRect);
+      return;
+    }
     moho::CHeightField* const field = map->mHeightField.get();
 
     const std::int32_t maxZ = field->height - 1;
@@ -610,6 +674,37 @@ namespace
   }
 
   /**
+   * Reads one length-prefixed payload (u32 size, then that many bytes) from the map stream.
+   */
+  [[nodiscard]] std::vector<char> ReadSizedPayload(gpg::BinaryReader& reader)
+  {
+    std::uint32_t payloadSize = 0;
+    reader.ReadExact(payloadSize);
+    std::vector<char> payload(payloadSize);
+    if (payloadSize != 0u) {
+      reader.Read(payload.data(), payload.size());
+    }
+    return payload;
+  }
+
+  // Legacy skip-list: two discarded dwords + a finite skip countdown, each
+  // seeking one record forward (asm 0x8A2164 `sub;jnz` proves finite).
+  void SkipLegacyRecordList(gpg::BinaryReader& reader)
+  {
+    std::uint32_t discardedA = 0;
+    std::uint32_t discardedB = 0;
+    std::int32_t skipCount = 0;
+    reader.ReadExact(discardedA);
+    reader.ReadExact(discardedB);
+    reader.ReadExact(skipCount);
+    for (; skipCount > 0; --skipCount) {
+      std::int32_t recordSize = 0;
+      reader.ReadExact(recordSize);
+      reader.stream()->VirtSeek(gpg::Stream::ModeReceive, gpg::Stream::OriginCurr, recordSize);
+    }
+  }
+
+  /**
    * One 4x4 block of the normal map, as two DXT words.
    */
   void EncodeNormalBlock(
@@ -695,23 +790,22 @@ namespace
     return taken;
   }
 
+  [[nodiscard]] bool NormalMapOnLoaderOn()
+  {
+    static const bool startupOff = moho::CFG_GetArgOption("/nonormalmaponloader", 0u, nullptr);
+    return moho::ren_NormalMapOnLoader && !startupOff;
+  }
+
   /**
-   * Runs on the map loader thread, with a few helpers. Rows go to whichever thread is free;
-   * only the loader's own thread reports progress, as that is where an abort throws.
+   * The whole map's normal blocks, encoded by the calling thread and a few helpers. Rows go to
+   * whichever thread is free; only the calling thread reports progress, as that is where an
+   * abort throws. Each block is `EncodeNormalBlock`'s, so the result is the one-thread result.
    */
-  void PrebuildNormalMap(
-    const moho::CWldTerrainRes* const owner,
+  [[nodiscard]] PrebuiltNormalMap EncodeNormalMapInParallel(
     const moho::CHeightField& field,
     moho::CBackgroundTaskControl& loadControl
   )
   {
-    static const bool startupOff = moho::CFG_GetArgOption("/nonormalmaponloader", 0u, nullptr);
-    if (!moho::ren_NormalMapOnLoader || startupOff || field.width <= 1 || field.height <= 1) {
-      return;
-    }
-
-    const auto start = std::chrono::steady_clock::now();
-
     PrebuiltNormalMap built{};
     built.blocksWide = AlignUpTo4(field.width - 1) / 4;
     built.blocksHigh = AlignUpTo4(field.height - 1) / 4;
@@ -761,6 +855,22 @@ namespace
       thread.join();
     }
     helpers.threads.clear();
+    return built;
+  }
+
+  /** Runs on the map loader thread (`EncodeNormalMapInParallel`), so `Finalize` only copies. */
+  void PrebuildNormalMap(
+    const moho::CWldTerrainRes* const owner,
+    const moho::CHeightField& field,
+    moho::CBackgroundTaskControl& loadControl
+  )
+  {
+    if (!NormalMapOnLoaderOn() || field.width <= 1 || field.height <= 1) {
+      return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    PrebuiltNormalMap built = EncodeNormalMapInParallel(field, loadControl);
+    const std::uint32_t threadCount = std::clamp(std::thread::hardware_concurrency() / 2u, 1u, 4u);
 
     gpg::Logf(
       "Terrain: normal map encoded on the loader in %.2f s, %u threads",
@@ -2286,6 +2396,16 @@ namespace moho
       if (prebuilt.blocksWide != AlignUpTo4(field->width - 1) / 4 || prebuilt.blocksHigh != AlignUpTo4(field->height - 1) / 4) {
         prebuilt = {};
       }
+      // None, or the map changed since the loader encoded it (a map start that flattens building
+      // skirts finalizes the terrain here): the same encoding, on this thread and a few helpers.
+      if (prebuilt.words.empty() && NormalMapOnLoaderOn()) {
+        const auto start = std::chrono::steady_clock::now();
+        prebuilt = EncodeNormalMapInParallel(*field, loadControl);
+        gpg::Logf(
+          "Terrain: normal map encoded in %.2f s (whole map, in parallel)",
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count()
+        );
+      }
     }
 
     const std::size_t tileCount = mNormalMap.size();
@@ -2416,6 +2536,124 @@ namespace moho
     const std::int32_t halfZ1 = CeilHalfCoordinate(rect.z1);
 
     mDebugDirtyTerrain->FillRect(halfX0, halfZ0, halfX1 - halfX0, halfZ1 - halfZ0, true);
+  }
+
+  void CWldTerrainRes::NotifyMapChanges(const gpg::Rect2i* const rects, const std::size_t count)
+  {
+    // Until the terrain is finalized, each change goes the original way (the first one finalizes).
+    std::size_t next = 0;
+    while (next < count && !GetBool()) {
+      NotifyMapChange(rects[next]);
+      ++next;
+    }
+    if (count - next < 2u) {
+      for (; next < count; ++next) {
+        NotifyMapChange(rects[next]);
+      }
+      return;
+    }
+
+    // A whole-map rectangle keeps UpdateNormalMap's own path, which can take the loader's encoding.
+    const CHeightField* const field = mMap->mHeightField.get();
+    std::vector<gpg::Rect2i> batch;
+    batch.reserve(count - next);
+    for (std::size_t i = next; i < count; ++i) {
+      const gpg::Rect2i& rect = rects[i];
+      if (field != nullptr && rect.x0 <= 0 && rect.z0 <= 0 && rect.x1 >= field->width - 1 && rect.z1 >= field->height - 1) {
+        UpdateNormalMap(rect);
+      } else {
+        batch.push_back(rect);
+      }
+    }
+    UpdateNormalMapRects(batch.data(), batch.size());
+
+    for (std::size_t i = next; i < count; ++i) {
+      const gpg::Rect2i& rect = rects[i];
+      mDebugDirtyRects.push_back(rect);
+      const std::int32_t halfX0 = FloorHalfCoordinate(rect.x0);
+      const std::int32_t halfX1 = CeilHalfCoordinate(rect.x1);
+      const std::int32_t halfZ0 = FloorHalfCoordinate(rect.z0);
+      const std::int32_t halfZ1 = CeilHalfCoordinate(rect.z1);
+      mDebugDirtyTerrain->FillRect(halfX0, halfZ0, halfX1 - halfX0, halfZ1 - halfZ0, true);
+    }
+  }
+
+  void CWldTerrainRes::UpdateNormalMapRects(const gpg::Rect2i* const rects, const std::size_t count)
+  {
+    const std::int32_t tileWidth = mNormalMapWidth;
+    const std::int32_t tileHeight = mNormalMapHeight;
+    CHeightField* const field = mMap->mHeightField.get();
+    if (count == 0u || tileWidth <= 0 || tileHeight <= 0 || field == nullptr || field->width <= 1 || field->height <= 1) {
+      return;
+    }
+
+    // As UpdateNormalMap: the same tiles, clips and 4x4 alignment, per rectangle.
+    std::vector<gpg::Rect2i> local; // a tile's rectangles, in its own block-aligned coordinates
+    const std::size_t tileCount = mNormalMap.size();
+    std::size_t tileIndex = 0u;
+    for (std::int32_t tileZBase = 0; tileZBase < field->height - 1; tileZBase += tileHeight) {
+      const std::int32_t tileZEnd = tileZBase + tileHeight;
+      for (std::int32_t tileXBase = 0; tileXBase < field->width - 1; tileXBase += tileWidth, ++tileIndex) {
+        if (tileIndex >= tileCount) {
+          return;
+        }
+        const std::int32_t tileXEnd = tileXBase + tileWidth;
+
+        local.clear();
+        gpg::Rect2i lockRect{};
+        for (std::size_t i = 0; i < count; ++i) {
+          const gpg::Rect2i& rect = rects[i];
+          const std::int32_t clippedX0 = std::max(tileXBase, rect.x0);
+          const std::int32_t clippedX1 = std::min(tileXEnd, rect.x1);
+          const std::int32_t clippedZ0 = std::max(tileZBase, rect.z0);
+          const std::int32_t clippedZ1 = std::min(tileZEnd, rect.z1);
+          if (clippedX0 >= clippedX1 || clippedZ0 >= clippedZ1) {
+            continue;
+          }
+          gpg::Rect2i blocks{};
+          blocks.x0 = AlignDownTo4(clippedX0 - tileXBase);
+          blocks.z0 = AlignDownTo4(clippedZ0 - tileZBase);
+          blocks.x1 = AlignUpTo4(clippedX1 - tileXBase);
+          blocks.z1 = AlignUpTo4(clippedZ1 - tileZBase);
+          if (local.empty()) {
+            lockRect = blocks;
+          } else {
+            lockRect.x0 = std::min(lockRect.x0, blocks.x0);
+            lockRect.z0 = std::min(lockRect.z0, blocks.z0);
+            lockRect.x1 = std::max(lockRect.x1, blocks.x1);
+            lockRect.z1 = std::max(lockRect.z1, blocks.z1);
+          }
+          local.push_back(blocks);
+        }
+        if (local.empty()) {
+          continue;
+        }
+
+        boost::shared_ptr<CD3DDynamicTextureSheet> texture = mNormalMap[tileIndex];
+        CD3DDynamicTextureSheet* const sheet = texture.get();
+        if (sheet == nullptr) {
+          continue;
+        }
+        std::uint32_t pitchBytes = 0;
+        void* mappedBits = nullptr;
+        if (!sheet->LockRect(reinterpret_cast<const RECT*>(&lockRect), &pitchBytes, &mappedBits)) {
+          continue;
+        }
+        auto* const lockBase = static_cast<std::uint8_t*>(mappedBits);
+        for (const gpg::Rect2i& blocks : local) {
+          for (std::int32_t localZ = blocks.z0; localZ < blocks.z1; localZ += 4) {
+            auto* blockOutput = reinterpret_cast<std::uint64_t*>(
+              lockBase + static_cast<std::size_t>((localZ - lockRect.z0) / 4) * pitchBytes
+            ) + static_cast<std::size_t>((blocks.x0 - lockRect.x0) / 4) * 2u;
+            for (std::int32_t localX = blocks.x0; localX < blocks.x1; localX += 4) {
+              EncodeNormalBlock(*field, tileXBase + localX, tileZBase + localZ, blockOutput);
+              blockOutput += 2;
+            }
+          }
+        }
+        (void)sheet->Unlock();
+      }
+    }
   }
 
   /**
@@ -2653,11 +2891,13 @@ namespace moho
    */
   void CWldTerrainRes::GetStratumMask(const std::int32_t stratumIndex, std::uint8_t* const outMask)
   {
+    // The channel itself (0x00E4BB68), not UpdateStratumMask's keep-the-others masks (0x00E4BB48): with
+    // those every read came back 0.
     static constexpr std::uint32_t kChannelMask[4] = {
-      0xFF00FFFFu,
-      0xFFFF00FFu,
-      0xFFFFFF00u,
-      0x00FFFFFFu,
+      0x00FF0000u,
+      0x0000FF00u,
+      0x000000FFu,
+      0xFF000000u,
     };
     static constexpr std::uint32_t kChannelShift[4] = {16u, 8u, 0u, 24u};
 
@@ -3194,48 +3434,9 @@ namespace moho
       SetSkycube(skycubePath);
     }
 
-    // Environment lookups: single <default> pair before 0x37, else counted loop.
-    if (version < 0x37u) {
-      const fa::string defaultKey("<default>");
-      fa::string environmentName;
-      reader.ReadString(&environmentName);
-      AddEnvLookup(defaultKey, environmentName);
-    } else {
-      std::int32_t envCount = 0;
-      reader.ReadExact(envCount);
-      for (; envCount > 0; --envCount) {
-        fa::string environmentKey;
-        fa::string environmentName;
-        reader.ReadString(&environmentKey);
-        reader.ReadString(&environmentName);
-        AddEnvLookup(environmentKey, environmentName);
-      }
-    }
+    LoadEnvironmentLookups(reader, version);
 
-    // 24 streamed lighting/sun/ambience/color/shadow/specular/bloom/fog floats.
-    reader.ReadExact(mLightingMultiplier);
-    reader.ReadExact(mSunDirection.x);
-    reader.ReadExact(mSunDirection.y);
-    reader.ReadExact(mSunDirection.z);
-    reader.ReadExact(mSunAmbience.x);
-    reader.ReadExact(mSunAmbience.y);
-    reader.ReadExact(mSunAmbience.z);
-    reader.ReadExact(mSunColor.x);
-    reader.ReadExact(mSunColor.y);
-    reader.ReadExact(mSunColor.z);
-    reader.ReadExact(mShadowFillColor.x);
-    reader.ReadExact(mShadowFillColor.y);
-    reader.ReadExact(mShadowFillColor.z);
-    reader.ReadExact(mSpecularColor.x);
-    reader.ReadExact(mSpecularColor.y);
-    reader.ReadExact(mSpecularColor.z);
-    reader.ReadExact(mSpecularColor.w);
-    reader.ReadExact(mBloom);
-    reader.ReadExact(mFogStartDistance);
-    reader.ReadExact(mFogCutoffDistance);
-    reader.ReadExact(mFogMinClamp);
-    reader.ReadExact(mFogMaxClamp);
-    reader.ReadExact(mFogCurveExponent);
+    LoadLightingAndFog(reader);
 
     // Water enable byte + three water elevations (stored on the map).
     mMap->mWaterEnabled = reader.ReadChar() != 0;
@@ -3252,127 +3453,16 @@ namespace moho
     );
     TickLoadingProgress(loadControl);
 
-    // Topographic samples + hypsometric palette + imager offset.
-    if (version < 0x38u) {
-      mTopographicSamples = 20;
-      mHypsometricColor[0] = 0xFF0E3EFFu;
-      mHypsometricColor[1] = 0xFF215CFFu;
-      mHypsometricColor[2] = 0xFF4785FFu;
-      mHypsometricColor[3] = 0xFF4C9D32u;
-      mHypsometricColor[4] = 0xFFFFFFFFu;
-    } else {
-      reader.ReadExact(mTopographicSamples);
-      reader.ReadExact(mHypsometricColor[0]);
-      reader.ReadExact(mHypsometricColor[1]);
-      reader.ReadExact(mHypsometricColor[2]);
-      reader.ReadExact(mHypsometricColor[3]);
-      reader.ReadExact(mHypsometricColor[4]);
-    }
-    if (version >= 0x39u) {
-      reader.ReadExact(mImagerElevationOffset);
-    }
+    LoadMapPalette(reader, version);
 
     LoadTexturing(reader, version);
     TickLoadingProgress(loadControl);
 
-    // Legacy skip-list: two discarded dwords + a finite skip countdown, each
-    // seeking one record forward (asm 0x8A2164 `sub;jnz` proves finite).
-    {
-      std::uint32_t discardedA = 0;
-      std::uint32_t discardedB = 0;
-      std::int32_t skipCount = 0;
-      reader.ReadExact(discardedA);
-      reader.ReadExact(discardedB);
-      reader.ReadExact(skipCount);
-      for (; skipCount > 0; --skipCount) {
-        std::int32_t recordSize = 0;
-        reader.ReadExact(recordSize);
-        reader.stream()->VirtSeek(gpg::Stream::ModeReceive, gpg::Stream::OriginCurr, recordSize);
-      }
-    }
+    SkipLegacyRecordList(reader);
     TickLoadingProgress(loadControl);
 
-    // Stratum mask sheets. Since 0x36 the two utility masks are named sheets;
-    // legacy maps carry a per-index mask loop (only index 0 is adopted).
-    if (version >= 0x36u) {
-      {
-        std::uint32_t payloadSize = 0;
-        reader.ReadExact(payloadSize);
-        std::vector<char> payload(payloadSize);
-        if (payloadSize != 0u) {
-          reader.Read(payload.data(), payload.size());
-        }
-        ID3DDeviceResources::TextureResourceHandle sheet{};
-        if (maskResources != nullptr) {
-          maskResources->GetTextureSheet(sheet, "_utilitya_mask.dds", payload.data(), payload.size());
-        }
-        mStrata.mStratumMask0.assign_retain(boost::SharedPtrRawFromSharedBorrow(sheet));
-      }
-      TickLoadingProgress(loadControl);
-      {
-        std::uint32_t payloadSize = 0;
-        reader.ReadExact(payloadSize);
-        std::vector<char> payload(payloadSize);
-        if (payloadSize != 0u) {
-          reader.Read(payload.data(), payload.size());
-        }
-        ID3DDeviceResources::TextureResourceHandle sheet{};
-        if (maskResources != nullptr) {
-          maskResources->GetTextureSheet(sheet, "_utilityb_mask.dds", payload.data(), payload.size());
-        }
-        mStrata.mStratumMask1.assign_retain(boost::SharedPtrRawFromSharedBorrow(sheet));
-      }
-      TickLoadingProgress(loadControl);
-    } else {
-      std::int32_t maskCount = 0;
-      reader.ReadExact(maskCount);
-      for (std::int32_t maskIndex = 0; maskIndex < maskCount; ++maskIndex) {
-        std::uint32_t payloadSize = 0;
-        reader.ReadExact(payloadSize);
-        std::vector<char> payload(payloadSize);
-        if (payloadSize != 0u) {
-          reader.Read(payload.data(), payload.size());
-        }
-        if (maskIndex == 0) {
-          ID3DDeviceResources::TextureResourceHandle sheetA{};
-          ID3DDeviceResources::TextureResourceHandle sheetB{};
-          if (maskResources != nullptr) {
-            maskResources->GetTextureSheet(sheetA, "_utilitya_mask.dds", payload.data(), payload.size());
-            maskResources->GetTextureSheet(sheetB, "_utilityb_mask.dds", payload.data(), payload.size());
-          }
-          mStrata.mStratumMask0.assign_retain(boost::SharedPtrRawFromSharedBorrow(sheetA));
-          mStrata.mStratumMask1.assign_retain(boost::SharedPtrRawFromSharedBorrow(sheetB));
-        }
-        TickLoadingProgress(loadControl);
-      }
-    }
-
-    // Water-map utility sheets, indexed `_utilityc%d.dds`. Index 0 becomes the
-    // live water-map texture (resolved through the D3D_GetDevice() singleton).
-    {
-      std::int32_t waterMapCount = 0;
-      reader.ReadExact(waterMapCount);
-      for (std::int32_t waterMapIndex = 0; waterMapIndex < waterMapCount; ++waterMapIndex) {
-        std::uint32_t payloadSize = 0;
-        reader.ReadExact(payloadSize);
-        std::vector<char> payload(payloadSize);
-        if (payloadSize != 0u) {
-          reader.Read(payload.data(), payload.size());
-        }
-
-        const fa::string sheetLocation = gpg::STR_Printf("_utilityc%d.dds", waterMapIndex);
-        if (waterMapIndex == 0) {
-          CD3DDevice* const device = D3D_GetDevice();
-          ID3DDeviceResources* const resources = device != nullptr ? device->GetResources() : nullptr;
-          ID3DDeviceResources::TextureResourceHandle sheet{};
-          if (resources != nullptr) {
-            resources->GetTextureSheet(sheet, sheetLocation.c_str(), payload.data(), payload.size());
-          }
-          AdoptWaterMapSheetFromResource(mWaterMapTexture, sheet);
-        }
-        TickLoadingProgress(loadControl);
-      }
-    }
+    LoadStratumMasks(reader, version, maskResources, loadControl);
+    LoadWaterMapSheets(reader, loadControl);
 
     // Water masks (foam / flatness / depth-bias) sized to half resolution, read
     // as raw grids straight into their freshly allocated lanes.
@@ -3401,7 +3491,170 @@ namespace moho
       reader.ReadString(&discardedNormal);
     }
 
-    // Skydome: loaded directly from 0x3A onward, else derived from world bounds.
+    LoadOrDeriveSkyDome(reader, version);
+
+    // Cartographic decals from 0x3B onward.
+    if (version >= 0x3Bu) {
+      mCartographic.ReadDecals(version, reader);
+    }
+
+    PrebuildNormalMap(this, *mMap->mHeightField.get(), loadControl); // engine addition
+
+    return true;
+  }
+
+  // Part of Load (0x008A1700).
+  // Environment lookups: single <default> pair before 0x37, else counted loop.
+  void CWldTerrainRes::LoadEnvironmentLookups(gpg::BinaryReader& reader, const std::uint32_t version)
+  {
+    if (version < 0x37u) {
+      const fa::string defaultKey("<default>");
+      fa::string environmentName;
+      reader.ReadString(&environmentName);
+      AddEnvLookup(defaultKey, environmentName);
+    } else {
+      std::int32_t envCount = 0;
+      reader.ReadExact(envCount);
+      for (; envCount > 0; --envCount) {
+        fa::string environmentKey;
+        fa::string environmentName;
+        reader.ReadString(&environmentKey);
+        reader.ReadString(&environmentName);
+        AddEnvLookup(environmentKey, environmentName);
+      }
+    }
+  }
+
+  // Part of Load (0x008A1700).
+  // 24 streamed lighting/sun/ambience/color/shadow/specular/bloom/fog floats.
+  void CWldTerrainRes::LoadLightingAndFog(gpg::BinaryReader& reader)
+  {
+    reader.ReadExact(mLightingMultiplier);
+    reader.ReadExact(mSunDirection.x);
+    reader.ReadExact(mSunDirection.y);
+    reader.ReadExact(mSunDirection.z);
+    reader.ReadExact(mSunAmbience.x);
+    reader.ReadExact(mSunAmbience.y);
+    reader.ReadExact(mSunAmbience.z);
+    reader.ReadExact(mSunColor.x);
+    reader.ReadExact(mSunColor.y);
+    reader.ReadExact(mSunColor.z);
+    reader.ReadExact(mShadowFillColor.x);
+    reader.ReadExact(mShadowFillColor.y);
+    reader.ReadExact(mShadowFillColor.z);
+    reader.ReadExact(mSpecularColor.x);
+    reader.ReadExact(mSpecularColor.y);
+    reader.ReadExact(mSpecularColor.z);
+    reader.ReadExact(mSpecularColor.w);
+    reader.ReadExact(mBloom);
+    reader.ReadExact(mFogStartDistance);
+    reader.ReadExact(mFogCutoffDistance);
+    reader.ReadExact(mFogMinClamp);
+    reader.ReadExact(mFogMaxClamp);
+    reader.ReadExact(mFogCurveExponent);
+  }
+
+  // Part of Load (0x008A1700).
+  // Topographic samples + hypsometric palette + imager offset.
+  void CWldTerrainRes::LoadMapPalette(gpg::BinaryReader& reader, const std::uint32_t version)
+  {
+    if (version < 0x38u) {
+      mTopographicSamples = 20;
+      mHypsometricColor[0] = 0xFF0E3EFFu;
+      mHypsometricColor[1] = 0xFF215CFFu;
+      mHypsometricColor[2] = 0xFF4785FFu;
+      mHypsometricColor[3] = 0xFF4C9D32u;
+      mHypsometricColor[4] = 0xFFFFFFFFu;
+    } else {
+      reader.ReadExact(mTopographicSamples);
+      reader.ReadExact(mHypsometricColor[0]);
+      reader.ReadExact(mHypsometricColor[1]);
+      reader.ReadExact(mHypsometricColor[2]);
+      reader.ReadExact(mHypsometricColor[3]);
+      reader.ReadExact(mHypsometricColor[4]);
+    }
+    if (version >= 0x39u) {
+      reader.ReadExact(mImagerElevationOffset);
+    }
+  }
+
+  // Part of Load (0x008A1700).
+  // Stratum mask sheets. Since 0x36 the two utility masks are named sheets;
+  // legacy maps carry a per-index mask loop (only index 0 is adopted).
+  void CWldTerrainRes::LoadStratumMasks(
+    gpg::BinaryReader& reader,
+    const std::uint32_t version,
+    ID3DDeviceResources* const maskResources,
+    CBackgroundTaskControl& loadControl
+  )
+  {
+    if (version >= 0x36u) {
+      {
+        std::vector<char> payload = ReadSizedPayload(reader);
+        ID3DDeviceResources::TextureResourceHandle sheet{};
+        if (maskResources != nullptr) {
+          maskResources->GetTextureSheet(sheet, "_utilitya_mask.dds", payload.data(), payload.size());
+        }
+        mStrata.mStratumMask0.assign_retain(boost::SharedPtrRawFromSharedBorrow(sheet));
+      }
+      TickLoadingProgress(loadControl);
+      {
+        std::vector<char> payload = ReadSizedPayload(reader);
+        ID3DDeviceResources::TextureResourceHandle sheet{};
+        if (maskResources != nullptr) {
+          maskResources->GetTextureSheet(sheet, "_utilityb_mask.dds", payload.data(), payload.size());
+        }
+        mStrata.mStratumMask1.assign_retain(boost::SharedPtrRawFromSharedBorrow(sheet));
+      }
+      TickLoadingProgress(loadControl);
+    } else {
+      std::int32_t maskCount = 0;
+      reader.ReadExact(maskCount);
+      for (std::int32_t maskIndex = 0; maskIndex < maskCount; ++maskIndex) {
+        std::vector<char> payload = ReadSizedPayload(reader);
+        if (maskIndex == 0) {
+          ID3DDeviceResources::TextureResourceHandle sheetA{};
+          ID3DDeviceResources::TextureResourceHandle sheetB{};
+          if (maskResources != nullptr) {
+            maskResources->GetTextureSheet(sheetA, "_utilitya_mask.dds", payload.data(), payload.size());
+            maskResources->GetTextureSheet(sheetB, "_utilityb_mask.dds", payload.data(), payload.size());
+          }
+          mStrata.mStratumMask0.assign_retain(boost::SharedPtrRawFromSharedBorrow(sheetA));
+          mStrata.mStratumMask1.assign_retain(boost::SharedPtrRawFromSharedBorrow(sheetB));
+        }
+        TickLoadingProgress(loadControl);
+      }
+    }
+  }
+
+  // Part of Load (0x008A1700).
+  // Water-map utility sheets, indexed `_utilityc%d.dds`. Index 0 becomes the
+  // live water-map texture (resolved through the D3D_GetDevice() singleton).
+  void CWldTerrainRes::LoadWaterMapSheets(gpg::BinaryReader& reader, CBackgroundTaskControl& loadControl)
+  {
+    std::int32_t waterMapCount = 0;
+    reader.ReadExact(waterMapCount);
+    for (std::int32_t waterMapIndex = 0; waterMapIndex < waterMapCount; ++waterMapIndex) {
+      std::vector<char> payload = ReadSizedPayload(reader);
+
+      const fa::string sheetLocation = gpg::STR_Printf("_utilityc%d.dds", waterMapIndex);
+      if (waterMapIndex == 0) {
+        CD3DDevice* const device = D3D_GetDevice();
+        ID3DDeviceResources* const resources = device != nullptr ? device->GetResources() : nullptr;
+        ID3DDeviceResources::TextureResourceHandle sheet{};
+        if (resources != nullptr) {
+          resources->GetTextureSheet(sheet, sheetLocation.c_str(), payload.data(), payload.size());
+        }
+        AdoptWaterMapSheetFromResource(mWaterMapTexture, sheet);
+      }
+      TickLoadingProgress(loadControl);
+    }
+  }
+
+  // Part of Load (0x008A1700).
+  // Skydome: loaded directly from 0x3A onward, else derived from world bounds.
+  void CWldTerrainRes::LoadOrDeriveSkyDome(gpg::BinaryReader& reader, const std::uint32_t version)
+  {
     if (version >= 0x3Au) {
       mSkyDome.Load(version, reader);
     } else {
@@ -3419,15 +3672,6 @@ namespace moho
       const Wm3::Vector3f domeOrigin{centerX, centerY, centerZ};
       mSkyDome.SetupHorizonAndCirrus(domeOrigin, sunElevation, domeRadius);
     }
-
-    // Cartographic decals from 0x3B onward.
-    if (version >= 0x3Bu) {
-      mCartographic.ReadDecals(version, reader);
-    }
-
-    PrebuildNormalMap(this, *mMap->mHeightField.get(), loadControl); // engine addition
-
-    return true;
   }
 
   /**

@@ -1,5 +1,7 @@
 #include "moho/mesh/MeshPrivate.h"
 
+#include "moho/console/CConCommand.h"
+
 namespace moho
 {
 
@@ -19,6 +21,21 @@ namespace moho
   // (?ren_ShadowBias@Moho@@3MA). Byte-verified default from ForgedAlliance.exe:
   // .data VA 0x00F57DFC = 0.005f.
   float ren_ShadowBias = 0.005f;
+
+  ShadowCasterRegion gShadowCasterRegion{};
+
+  /**
+   * Engine change: `ren_MeshParallelInterp`. MeshRenderer::Batch places every gathered mesh between
+   * ticks (MeshInstance::UpdateInterpolatedFields: position, orientation, pose blend, bounds) on the
+   * user worker pool before its serial walk, whose own calls then find the work done. Each instance
+   * writes only its own fields and pose, and the result doesn't depend on the order.
+   */
+  bool ren_MeshParallelInterp = true;
+  TConVar<bool> gTConVar_ren_MeshParallelInterp(
+    "ren_MeshParallelInterp",
+    "Place the meshes a pass gathers between ticks on worker threads (1, the default), or one by one in the pass (0).",
+    &ren_MeshParallelInterp
+  );
 }
 
 namespace
@@ -69,7 +86,17 @@ namespace moho
 namespace
 {
     MeshRenderer* gMeshRendererInstance = nullptr;
+
+    /// Engine addition (water bodies): the level the next mirrored passes reflect at, when set.
+    bool sMirrorElevationSet = false;
+    float sMirrorElevation = 0.0f;
 }
+
+  void MESH_SetMirrorElevation(const bool set, const float elevation) noexcept
+  {
+    sMirrorElevationSet = set;
+    sMirrorElevation = elevation;
+  }
 
 
   /**
@@ -652,6 +679,10 @@ namespace
     } else {
       surfaceElevation = -1000.0f;
     }
+    // Engine addition (water bodies): a reflection pass for a lake mirrors at the lake's level.
+    if (mirrored && sMirrorElevationSet) {
+      surfaceElevation = sMirrorElevation;
+    }
 
     // Global lookup textures + the three per-frame texture binds.
     LoadGlobalTextures();
@@ -820,7 +851,8 @@ namespace
       if (sv.shadowBias.Exists()) {
         sv.shadowBias.SetFloat(shadowBias);
       }
-      const int shadowSize = shadow->mShadowSize;
+      // Engine change (ren_ShadowCascades): the whole-view map's texels, which is mShadowSize without the atlas.
+      const int shadowSize = ShadowMapTexels(*shadow);
       if (sv.shadowSize.Exists()) {
         sv.shadowSize.SetFloat(static_cast<float>(shadowSize));
       }
@@ -1609,6 +1641,34 @@ namespace
       collected, &const_cast<GeomCamera3&>(camera).solid2, cameraForward, fadePlane
     );
 
+    // Engine change (ren_MeshParallelInterp): the instances the walk below would place, placed first on
+    // the worker pool. The gates are the walk's own, so the same instances are updated either way.
+    if (ren_MeshParallelInterp && CUserWorkerPool::ConfiguredWorkerCount() != 0U) {
+      static std::vector<MeshInstance*> sStale;
+      sStale.clear();
+      for (MeshInstance* const instance : collected) {
+        const bool isStatic = instance->isStaticPose != 0u;
+        if ((!ren_MeshSkinned && isStatic) || (!ren_MeshStatic && !isStatic) || instance->isHidden != 0u) {
+          continue;
+        }
+        if (instance->visibilityCamera != nullptr && instance->visibilityCamera != &camera) {
+          continue;
+        }
+        if (instance->InterpolatedFieldsStale()) {
+          sStale.push_back(instance);
+        }
+      }
+      constexpr std::size_t kParallelInterpMin = 64U;
+      constexpr std::size_t kParallelInterpGrain = 32U;
+      if (sStale.size() >= kParallelInterpMin) {
+        CUserWorkerPool::Get().ParallelFor(sStale.size(), kParallelInterpGrain, [&](const std::size_t begin, const std::size_t end) {
+          for (std::size_t index = begin; index < end; ++index) {
+            sStale[index]->UpdateInterpolatedFields();
+          }
+        });
+      }
+    }
+
 
     for (MeshInstance* const instance : collected) {
 
@@ -1672,6 +1732,11 @@ namespace
         continue;
       }
 
+      // Engine addition (ren_ShadowCasterCull): in the shadow pass, a mesh whose shadow can't reach the view.
+      if (gShadowCasterRegion.active && !gShadowCasterRegion.MayShadow(instance->sphere)) {
+        continue;
+      }
+
       // Append into the bucket keyed by (isStaticPose, selected LOD, sort
       // order). The LOD lane carries the `ComputeLOD` result: the binary
       // stores it at 0x007DFBED and the key load at 0x007DFCDC reads that same
@@ -1706,6 +1771,54 @@ namespace
    * effect reads its skinning palette from there. Each Batch call starts the
    * texture over: the draws of the previous map have all been issued by then.
    */
+  void MeshRenderer::SaveBatch(std::vector<SavedBucket>& out) const
+  {
+    std::size_t used = 0U;
+    for (const MeshBatchBucket& bucket : meshes) {
+      if (bucket.second.empty()) {
+        continue;
+      }
+      if (used == out.size()) {
+        out.emplace_back();
+      }
+      SavedBucket& saved = out[used++];
+      saved.key = bucket.first;
+      saved.instances.assign(bucket.second.begin(), bucket.second.end());
+    }
+    out.resize(used);
+  }
+
+  void MeshRenderer::BatchFromSaved(
+    const std::int32_t gameTick, const float deltaFrameArg, const GeomCamera3& camera, const std::vector<SavedBucket>& saved
+  )
+  {
+    RecycleBatchBuckets(meshes);
+    instanceListSize = gameTick;
+    instanceListStateFlags = 0u;
+    deltaFrame = deltaFrameArg;
+    for (const SavedBucket& source : saved) {
+      MeshBatchInstanceVector* bucket = nullptr;
+      for (MeshInstance* const instance : source.instances) {
+        if (instance->visibilityCamera != nullptr && instance->visibilityCamera != &camera) {
+          continue;
+        }
+        if (!camera.solid2.Intersects(instance->sphere)) {
+          continue;
+        }
+        if (bucket == nullptr) {
+          MeshBatchKey key = source.key;
+          bucket = MeshBatchBucketTreeFindOrCreateInstances(key, meshes);
+          if (bucket == nullptr) {
+            break;
+          }
+        }
+        bucket->push_back(instance);
+        ++instanceListStateFlags;
+      }
+    }
+    PrepareBonePalettes();
+  }
+
   void MeshRenderer::PrepareBonePalettes()
   {
     if (!HardwareMeshBatch::UsesBoneTexture()) {

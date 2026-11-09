@@ -26,6 +26,7 @@
 #include "moho/misc/CZipFile.h"
 #include "moho/sim/Sim.h"
 #include "lua/LuaCrashDump.h"
+#include "lua/LuaIncrementalGc.h"
 
 namespace moho
 {
@@ -124,7 +125,10 @@ namespace moho
         (void)marker;
       }
 
-      auto* const createdState = new LuaPlus::LuaState(LuaPlus::LuaState::LIB_BASE);
+      auto* const createdState = new LuaPlus::LuaState(
+        LuaPlus::LuaState::LIB_BASE,
+        static_cast<int>(moho::lua_incremental::ELuaVmRole::SessionUi)
+      );
       if (LuaPlus::LuaState* const previousState = scenario->mState;
           createdState != previousState && previousState != nullptr) {
         delete previousState;
@@ -262,7 +266,8 @@ namespace moho
         earlyMap.emplace(scenario, loadControl);
       }
 
-      RRuleGameRules* const createdRules = RRuleGameRules::Create(scenario->mGameMods, loadControl);
+      // Engine addition (RULE_SetKeepBetweenSessions): the last session's rules when the editor keeps them.
+      RRuleGameRules* const createdRules = RULE_TakeOrCreate(scenario->mGameMods, loadControl);
       if (RRuleGameRules* const previousRules = scenario->mGameRules;
           createdRules != previousRules && previousRules != nullptr) {
         delete previousRules;

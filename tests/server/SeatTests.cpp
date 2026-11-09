@@ -27,7 +27,11 @@
 #include "moho/net/EClientMsg.h"
 #include "moho/net/ECmdStreamOp.h"
 #include "moho/net/IMessageReceiver.h"
+#include "moho/net/ELobbyMsg.h"
 #include "netlink/EngineLinks.h"
+#include "remote/FocusAndCameras.h"
+#include "remote/SpeedLimit.h"
+#include "remote/ContentCheck.h"
 #include "remote/ServerClient.h"
 #include "remote/client/ServerRelayConnector.h"
 #include "remote/client/ViewMerge.h"
@@ -35,8 +39,10 @@
 #include "remote/net/Datagram.h"
 #include "remote/net/GameLinks.h"
 #include "remote/net/LobbySignals.h"
+#include "server/LinkSpeed.h"
 #include "server/LobbySignaller.h"
 #include "server/LobbyRelay.h"
+#include "server/LobbyScriptData.h"
 #include "server/SeatIntake.h"
 
 namespace
@@ -595,6 +601,479 @@ TEST(LobbyRelay, ClosedAtLaunch)
   EXPECT_EQ(relay.Count(ELobbyRelayVerdict::Closed), 2u);
 }
 
+// Plan WPR.49: the lobby's script data as the relay reads it (server/LobbyScriptData.h).
+namespace
+{
+  using faf::server::SLuaBytesValue;
+
+  SLuaBytesValue LuaString(const std::string& text)
+  {
+    SLuaBytesValue value;
+    value.kind = SLuaBytesValue::EKind::String;
+    value.text = text;
+    return value;
+  }
+
+  SLuaBytesValue LuaNumber(const float number)
+  {
+    SLuaBytesValue value;
+    value.kind = SLuaBytesValue::EKind::Number;
+    std::memcpy(value.raw, &number, sizeof(number));
+    return value;
+  }
+
+  SLuaBytesValue LuaTable(std::vector<std::pair<SLuaBytesValue, SLuaBytesValue>> pairs)
+  {
+    SLuaBytesValue value;
+    value.kind = SLuaBytesValue::EKind::Table;
+    for (auto& [key, item] : pairs) {
+      value.keys.push_back(std::move(key));
+      value.values.push_back(std::move(item));
+    }
+    return value;
+  }
+
+  std::vector<std::uint8_t> LuaBytes(const SLuaBytesValue& value)
+  {
+    std::vector<std::uint8_t> bytes;
+    faf::server::WriteLuaBytes(value, bytes);
+    return bytes;
+  }
+
+  /** A whole `CLobby` message: type, 16-bit whole size, payload. */
+  std::vector<std::uint8_t> LobbyMessage(const moho::ELobbyMsg type, const std::vector<std::uint8_t>& payload)
+  {
+    const std::size_t size = 3u + payload.size();
+    std::vector<std::uint8_t> message = {static_cast<std::uint8_t>(type), static_cast<std::uint8_t>(size), static_cast<std::uint8_t>(size >> 8u)};
+    message.insert(message.end(), payload.begin(), payload.end());
+    return message;
+  }
+
+  /** The value of `key` in the `Options` (or `GameInfo.GameOptions`) of script data, as a string. */
+  std::string OptionIn(const std::vector<std::uint8_t>& payload, const std::string& key)
+  {
+    SLuaBytesValue root;
+    if (!faf::server::ParseLuaBytes(payload, root)) {
+      return "<unreadable>";
+    }
+    SLuaBytesValue* options = root.Field("Options");
+    if (options == nullptr) {
+      SLuaBytesValue* const info = root.Field("GameInfo");
+      options = info != nullptr ? info->Field("GameOptions") : nullptr;
+    }
+    const SLuaBytesValue* const value = options != nullptr ? options->Field(key) : nullptr;
+    return value == nullptr ? "<none>" : value->text;
+  }
+} // namespace
+
+TEST(LobbyScriptData, ReadsAndWritesTheLobbysByteForm)
+{
+  const SLuaBytesValue value = LuaTable({{LuaString("Type"), LuaString("GameOptions")},
+                                         {LuaNumber(1.0f), LuaTable({{LuaString("a"), SLuaBytesValue{}}})}});
+  const std::vector<std::uint8_t> bytes = LuaBytes(value);
+  // tag 4, "Type" string, "GameOptions" string, number 1.0f, table {a = nil}, end.
+  EXPECT_EQ(bytes.front(), 4u);
+  EXPECT_EQ(bytes.back(), 5u);
+  SLuaBytesValue back;
+  ASSERT_TRUE(faf::server::ParseLuaBytes(bytes, back));
+  EXPECT_EQ(LuaBytes(back), bytes);
+  ASSERT_NE(back.Field("Type"), nullptr);
+  EXPECT_TRUE(back.Field("Type")->IsString("GameOptions"));
+
+  // Cut short, bytes left over, an unknown tag, nesting past the limit: not one value.
+  EXPECT_FALSE(faf::server::ParseLuaBytes(std::span<const std::uint8_t>(bytes).first(bytes.size() - 1u), back));
+  std::vector<std::uint8_t> longer = bytes;
+  longer.push_back(2u);
+  EXPECT_FALSE(faf::server::ParseLuaBytes(longer, back));
+  EXPECT_FALSE(faf::server::ParseLuaBytes(std::vector<std::uint8_t>{9u}, back));
+  std::vector<std::uint8_t> deep;
+  for (int i = 0; i < 40; ++i) {
+    deep.insert(deep.end(), {4u, 1u, 'k', 0u});
+  }
+  deep.push_back(2u);
+  deep.insert(deep.end(), 40u, 5u);
+  EXPECT_FALSE(faf::server::ParseLuaBytes(deep, back));
+}
+
+// Plan WP15.4: the server's pause count written into a `Sync` table's bytes, nothing else of it changed.
+TEST(LobbyScriptData, SetTableNumberChangesOneNumber)
+{
+  const std::vector<std::uint8_t> sync = LuaBytes(LuaTable({{LuaString("PausedBy"), LuaNumber(2.0f)},
+                                                            {LuaString("TimeoutsRemaining"), LuaNumber(-1.0f)},
+                                                            {LuaString("Score"), LuaTable({{LuaString("x"), LuaString("y")}})}}));
+  std::vector<std::uint8_t> out;
+  ASSERT_TRUE(faf::server::SetTableNumber(sync, "TimeoutsRemaining", 3.0f, out));
+  EXPECT_EQ(out.size(), sync.size());
+  SLuaBytesValue back;
+  ASSERT_TRUE(faf::server::ParseLuaBytes(out, back));
+  float value = 0.0f;
+  std::memcpy(&value, back.Field("TimeoutsRemaining")->raw, sizeof(value));
+  EXPECT_EQ(value, 3.0f);
+  std::memcpy(&value, back.Field("PausedBy")->raw, sizeof(value));
+  EXPECT_EQ(value, 2.0f);
+  ASSERT_NE(back.Field("Score"), nullptr);
+  EXPECT_TRUE(back.Field("Score")->Field("x")->IsString("y"));
+  // A key that isn't there, or isn't a number, and bytes that don't read: nothing written.
+  std::vector<std::uint8_t> untouched = {7u};
+  EXPECT_FALSE(faf::server::SetTableNumber(sync, "Missing", 1.0f, untouched));
+  EXPECT_FALSE(faf::server::SetTableNumber(sync, "Score", 1.0f, untouched));
+  EXPECT_FALSE(faf::server::SetTableNumber(std::vector<std::uint8_t>{4u, 1u}, "TimeoutsRemaining", 1.0f, untouched));
+  EXPECT_EQ(untouched, (std::vector<std::uint8_t>{7u}));
+}
+
+TEST(LobbyScriptData, PinnedOptionsGetTheMatchsValues)
+{
+  const faf::server::SPinnedOptions pinned = {{"Victory", LuaBytes(LuaString("demoralization"))}, {"Share", LuaBytes(LuaString("FullShare"))}};
+
+  // A host's change of a pinned option and of a free one: the pinned one goes back to the match's.
+  std::vector<std::uint8_t> options = LuaBytes(LuaTable({{LuaString("Type"), LuaString("GameOptions")},
+                                                          {LuaString("Options"), LuaTable({{LuaString("Victory"), LuaString("sandbox")},
+                                                                                           {LuaString("UnitCap"), LuaString("500")}})}}));
+  EXPECT_TRUE(faf::server::PinGameOptions(options, pinned));
+  EXPECT_EQ(OptionIn(options, "Victory"), "demoralization");
+  EXPECT_EQ(OptionIn(options, "UnitCap"), "500");
+  EXPECT_EQ(OptionIn(options, "Share"), "<none>"); // a change names only what it changes
+  // Already the match's: left as it is.
+  EXPECT_FALSE(faf::server::PinGameOptions(options, pinned));
+
+  // The whole game state a joiner gets: every pinned option, those the host left out too.
+  std::vector<std::uint8_t> info = LuaBytes(LuaTable(
+    {{LuaString("Type"), LuaString("GameInfo")},
+     {LuaString("GameInfo"), LuaTable({{LuaString("GameOptions"), LuaTable({{LuaString("Victory"), LuaString("assassination")}})}})}}
+  ));
+  EXPECT_TRUE(faf::server::PinGameOptions(info, pinned));
+  EXPECT_EQ(OptionIn(info, "Victory"), "demoralization");
+  EXPECT_EQ(OptionIn(info, "Share"), "FullShare");
+
+  // Anything else, readable or not, isn't touched.
+  std::vector<std::uint8_t> chat = LuaBytes(LuaTable({{LuaString("Type"), LuaString("Chat")}, {LuaString("Victory"), LuaString("x")}}));
+  const std::vector<std::uint8_t> chatBefore = chat;
+  EXPECT_FALSE(faf::server::PinGameOptions(chat, pinned));
+  EXPECT_EQ(chat, chatBefore);
+  std::vector<std::uint8_t> garbage = {104u, 105u, 33u};
+  EXPECT_FALSE(faf::server::PinGameOptions(garbage, pinned));
+}
+
+// Plan WP17.6: an organiser-run lobby's player readies up and nothing else.
+namespace
+{
+  SLuaBytesValue LuaBoolean(const bool value)
+  {
+    SLuaBytesValue out;
+    out.kind = SLuaBytesValue::EKind::Boolean;
+    out.raw[0] = value ? 1u : 0u;
+    return out;
+  }
+
+  std::vector<std::uint8_t> PlayerOptions(std::vector<std::pair<SLuaBytesValue, SLuaBytesValue>> options)
+  {
+    return LuaBytes(LuaTable({{LuaString("Type"), LuaString("PlayerOptions")}, {LuaString("Slot"), LuaNumber(1.0f)},
+                              {LuaString("Options"), LuaTable(std::move(options))}}));
+  }
+} // namespace
+
+TEST(LobbyScriptData, APlayersOwnOptionsKeepOnlyReady)
+{
+  using faf::server::EPlayerScript;
+  // Faction and team go; Ready stays, and so does the rest of the message.
+  std::vector<std::uint8_t> mixed = PlayerOptions({{LuaString("Faction"), LuaNumber(3.0f)}, {LuaString("Ready"), LuaBoolean(true)}, {LuaString("Team"), LuaNumber(2.0f)}});
+  EXPECT_EQ(faf::server::LimitPlayerScript(mixed), EPlayerScript::Rewritten);
+  SLuaBytesValue back;
+  ASSERT_TRUE(faf::server::ParseLuaBytes(mixed, back));
+  ASSERT_NE(back.Field("Options"), nullptr);
+  EXPECT_EQ(back.Field("Options")->keys.size(), 1u);
+  ASSERT_NE(back.Field("Options")->Field("Ready"), nullptr);
+  EXPECT_EQ(back.Field("Options")->Field("Ready")->raw[0], 1u);
+  EXPECT_NE(back.Field("Slot"), nullptr);
+  // Ready alone: as it was.
+  std::vector<std::uint8_t> ready = PlayerOptions({{LuaString("Ready"), LuaBoolean(false)}});
+  const std::vector<std::uint8_t> readyBefore = ready;
+  EXPECT_EQ(faf::server::LimitPlayerScript(ready), EPlayerScript::Unchanged);
+  EXPECT_EQ(ready, readyBefore);
+  // Nothing but a colour: nothing left to send.
+  std::vector<std::uint8_t> colour = PlayerOptions({{LuaString("PlayerColor"), LuaNumber(4.0f)}});
+  EXPECT_EQ(faf::server::LimitPlayerScript(colour), EPlayerScript::Refused);
+  // The requests to the host.
+  for (const char* const request : {"MovePlayer", "RequestColor", "RequestConvertToObserver", "RequestConvertToPlayer"}) {
+    std::vector<std::uint8_t> asked = LuaBytes(LuaTable({{LuaString("Type"), LuaString(request)}, {LuaString("RequestedSlot"), LuaNumber(2.0f)}}));
+    EXPECT_EQ(faf::server::LimitPlayerScript(asked), EPlayerScript::Refused) << request;
+  }
+  // Chat, game options, garbage: not this rule's.
+  std::vector<std::uint8_t> chat = LuaBytes(LuaTable({{LuaString("Type"), LuaString("Chat")}, {LuaString("Text"), LuaString("gl hf")}}));
+  EXPECT_EQ(faf::server::LimitPlayerScript(chat), EPlayerScript::Unchanged);
+  std::vector<std::uint8_t> garbage = {104u, 105u, 33u};
+  EXPECT_EQ(faf::server::LimitPlayerScript(garbage), EPlayerScript::Unchanged);
+}
+
+TEST(LobbyRelay, OrganisedLobbysPlayersOnlyReadyUp)
+{
+  CLobbyRelay relay;
+  relay.AddParticipant(1001);
+  relay.AddParticipant(1002);
+  relay.SetHost(1001);
+  const auto script = [](const std::vector<std::uint8_t>& payload) { return LobbyMessage(moho::ELobbyMsg::LOBMSG_BroadcastScriptData, payload); };
+  // A player's move request: dropped and counted.
+  const std::vector<std::uint8_t> move = LuaBytes(LuaTable({{LuaString("Type"), LuaString("MovePlayer")}, {LuaString("RequestedSlot"), LuaNumber(1.0f)}}));
+  EXPECT_EQ(Relay(relay, 1002, LobbyBody(1001, script(move)), 1u).verdict, ELobbyRelayVerdict::Locked);
+  EXPECT_EQ(relay.Count(ELobbyRelayVerdict::Locked), 1u);
+  // A player's faction and ready: on with Ready alone.
+  const SRelayed options = Relay(relay, 1002, LobbyBody(1001, script(PlayerOptions({{LuaString("Faction"), LuaNumber(2.0f)}, {LuaString("Ready"), LuaBoolean(true)}}))), 1u);
+  ASSERT_EQ(options.verdict, ELobbyRelayVerdict::Forward);
+  // The frame: the Lobby kind, the sender's uid (two varint bytes for 1002), then the message as it goes on.
+  const std::vector<std::uint8_t> forwarded(options.frame.begin() + 3, options.frame.end());
+  ASSERT_GT(forwarded.size(), 3u);
+  EXPECT_EQ(forwarded.size(), static_cast<std::size_t>(forwarded[1]) | (static_cast<std::size_t>(forwarded[2]) << 8u));
+  SLuaBytesValue back;
+  ASSERT_TRUE(faf::server::ParseLuaBytes(std::span<const std::uint8_t>(forwarded).subspan(3u), back));
+  EXPECT_EQ(back.Field("Options")->keys.size(), 1u);
+  EXPECT_NE(back.Field("Options")->Field("Ready"), nullptr);
+  EXPECT_EQ(relay.PlayerOptionsLimited(), 1u);
+  // The host's own messages, chat and the rest go as they are.
+  const std::vector<std::uint8_t> hostMove = script(PlayerOptions({{LuaString("Faction"), LuaNumber(2.0f)}}));
+  const SRelayed host = Relay(relay, 1001, LobbyBody(1002, hostMove), 1u);
+  EXPECT_EQ(std::vector<std::uint8_t>(host.frame.begin() + 3, host.frame.end()), hostMove);
+  const std::vector<std::uint8_t> chat = script(LuaBytes(LuaTable({{LuaString("Type"), LuaString("Chat")}})));
+  const SRelayed chatted = Relay(relay, 1002, LobbyBody(1001, chat), 1u);
+  EXPECT_EQ(std::vector<std::uint8_t>(chatted.frame.begin() + 3, chatted.frame.end()), chat);
+  // A player-hosted lobby's players change what they like.
+  CLobbyRelay player;
+  player.SetControl(faf::server::ELobbyControl::Player);
+  player.AddParticipant(1001);
+  player.AddParticipant(1002);
+  player.SetHost(1001);
+  EXPECT_EQ(Relay(player, 1002, LobbyBody(1001, script(move)), 1u).verdict, ELobbyRelayVerdict::Forward);
+}
+
+// Plan WP17.2: where each participant sits (as the host's lobby says) and who is ready, for the control service.
+TEST(LobbyRelay, ReadsSlotsAndReadyForTheControlService)
+{
+  CLobbyRelay relay;
+  relay.AddParticipant(1001);
+  relay.AddParticipant(1002);
+  relay.SetHost(1001);
+  const auto script = [](const std::vector<std::uint8_t>& payload) { return LobbyMessage(moho::ELobbyMsg::LOBMSG_BroadcastScriptData, payload); };
+  const auto readyAt = [](const float slot, const bool ready) {
+    return LuaBytes(LuaTable({{LuaString("Type"), LuaString("PlayerOptions")}, {LuaString("Slot"), LuaNumber(slot)},
+                              {LuaString("Options"), LuaTable({{LuaString("Ready"), LuaBoolean(ready)}})}}));
+  };
+  EXPECT_EQ(relay.LobbySlotOf(1002), 0);
+  EXPECT_FALSE(relay.ReadyOf(1002).has_value());
+  // The host seats 1002 (`SlotAssigned`, OwnerID as lobby.lua's string) and tells it the whole game (`GameInfo`).
+  const std::vector<std::uint8_t> assigned = LuaBytes(LuaTable(
+    {{LuaString("Type"), LuaString("SlotAssigned")}, {LuaString("Slot"), LuaNumber(3.0f)}, {LuaString("Options"), LuaTable({{LuaString("OwnerID"), LuaString("1002")}})}}
+  ));
+  EXPECT_EQ(Relay(relay, 1001, LobbyBody(1002, script(assigned)), 1u).verdict, ELobbyRelayVerdict::Forward);
+  EXPECT_EQ(relay.LobbySlotOf(1002), 3);
+  const std::vector<std::uint8_t> info = LuaBytes(LuaTable(
+    {{LuaString("Type"), LuaString("GameInfo")},
+     {LuaString("GameInfo"),
+      LuaTable({{LuaString("PlayerOptions"),
+                 LuaTable({{LuaNumber(1.0f), LuaTable({{LuaString("OwnerID"), LuaString("1001")}})},
+                           {LuaNumber(2.0f), LuaTable({{LuaString("OwnerID"), LuaString("1002")}})}})}})}}
+  ));
+  EXPECT_EQ(Relay(relay, 1001, LobbyBody(1002, LobbyMessage(moho::ELobbyMsg::LOBMSG_DirectScriptData, info)), 2u).verdict, ELobbyRelayVerdict::Forward);
+  EXPECT_EQ(relay.LobbySlotOf(1001), 1);
+  EXPECT_EQ(relay.LobbySlotOf(1002), 2);
+  // A player can't seat anyone.
+  const std::vector<std::uint8_t> claimed = LuaBytes(LuaTable(
+    {{LuaString("Type"), LuaString("SlotMove")}, {LuaString("NewSlot"), LuaNumber(1.0f)}, {LuaString("Options"), LuaTable({{LuaString("OwnerID"), LuaString("1002")}})}}
+  ));
+  (void)Relay(relay, 1002, LobbyBody(1001, script(claimed)), 3u);
+  EXPECT_EQ(relay.LobbySlotOf(1002), 2);
+  // 1002 readies up (its own options; the Slot it names doesn't matter); the host sets 1002's slot back to not ready
+  // and readies itself; the same state again is no change.
+  (void)Relay(relay, 1002, LobbyBody(1001, script(readyAt(7.0f, true))), 4u);
+  EXPECT_EQ(relay.ReadyOf(1002), std::optional<bool>(true));
+  (void)Relay(relay, 1001, LobbyBody(1002, script(readyAt(2.0f, false))), 5u);
+  (void)Relay(relay, 1001, LobbyBody(1002, script(readyAt(1.0f, true))), 6u);
+  (void)Relay(relay, 1001, LobbyBody(1002, script(readyAt(1.0f, true))), 7u);
+  // The host's message for a slot nobody sits in counts for nobody.
+  (void)Relay(relay, 1001, LobbyBody(1002, script(readyAt(5.0f, true))), 8u);
+  EXPECT_EQ(relay.ReadyOf(1002), std::optional<bool>(false));
+  EXPECT_EQ(relay.ReadyOf(1001), std::optional<bool>(true));
+  const std::vector<std::pair<std::int32_t, bool>> changes = relay.TakeReadyChanges();
+  const std::vector<std::pair<std::int32_t, bool>> expected = {{1002, true}, {1002, false}, {1001, true}};
+  EXPECT_EQ(changes, expected);
+  EXPECT_TRUE(relay.TakeReadyChanges().empty());
+}
+
+TEST(LobbyRelay, EjectsOfParticipantsNeverArrive)
+{
+  CLobbyRelay relay;
+  relay.AddParticipant(1001);
+  relay.AddParticipant(1002);
+  const std::vector<std::uint8_t> reason = {'K', 'i', 'c', 'k', 0u};
+  EXPECT_EQ(Relay(relay, 1001, LobbyBody(1002, LobbyMessage(moho::ELobbyMsg::LOBMSG_Rejected, reason)), 1u).verdict, ELobbyRelayVerdict::EjectIgnored);
+  EXPECT_EQ(Relay(relay, 1001, LobbyBody(1002, LobbyMessage(moho::ELobbyMsg::LOBMSG_DeletePeer, {0xEAu, 0x03u, 0u, 0u})), 1u).verdict,
+            ELobbyRelayVerdict::EjectIgnored);
+  EXPECT_EQ(relay.Count(ELobbyRelayVerdict::EjectIgnored), 2u);
+  // The rest of the lobby's talk goes on.
+  EXPECT_EQ(Relay(relay, 1001, LobbyBody(1002, LobbyMessage(moho::ELobbyMsg::LOBMSG_EstablishedPeers, {0xFFu, 0xFFu, 0xFFu, 0xFFu})), 1u).verdict,
+            ELobbyRelayVerdict::Forward);
+}
+
+// Plan WP17.1: a player-hosted lobby's host keeps a host's powers; nobody else gets them.
+TEST(LobbyRelay, PlayerHostedLobbyLetsOnlyTheHostEject)
+{
+  CLobbyRelay relay;
+  relay.SetControl(faf::server::ELobbyControl::Player);
+  relay.AddParticipant(1001);
+  relay.AddParticipant(1002);
+  relay.AddParticipant(1003);
+  const std::vector<std::uint8_t> reason = {'K', 'i', 'c', 'k', 0u};
+  const std::vector<std::uint8_t> kick = LobbyMessage(moho::ELobbyMsg::LOBMSG_Rejected, reason);
+  // No host known yet: dropped.
+  EXPECT_EQ(Relay(relay, 1001, LobbyBody(1002, kick), 1u).verdict, ELobbyRelayVerdict::EjectIgnored);
+  relay.SetHost(1001);
+  const SRelayed fromHost = Relay(relay, 1001, LobbyBody(1002, kick), 1u);
+  EXPECT_EQ(fromHost.verdict, ELobbyRelayVerdict::EjectForwarded);
+  EXPECT_EQ(fromHost.to, 1002);
+  EXPECT_EQ(fromHost.message, kick);
+  // Another participant can't eject, the host's notice to the others goes, and after a succession the old host can't.
+  EXPECT_EQ(Relay(relay, 1003, LobbyBody(1002, kick), 1u).verdict, ELobbyRelayVerdict::EjectIgnored);
+  EXPECT_EQ(Relay(relay, 1001, LobbyBody(1003, LobbyMessage(moho::ELobbyMsg::LOBMSG_DeletePeer, {0xEAu, 0x03u, 0u, 0u})), 1u).verdict,
+            ELobbyRelayVerdict::EjectForwarded);
+  relay.SetHost(1003);
+  EXPECT_EQ(Relay(relay, 1001, LobbyBody(1002, kick), 1u).verdict, ELobbyRelayVerdict::EjectIgnored);
+  EXPECT_EQ(Relay(relay, 1003, LobbyBody(1002, kick), 1u).verdict, ELobbyRelayVerdict::EjectForwarded);
+  EXPECT_EQ(relay.Count(ELobbyRelayVerdict::EjectIgnored), 3u);
+  EXPECT_EQ(relay.Count(ELobbyRelayVerdict::EjectForwarded), 3u);
+
+  // Nothing is pinned in a player-hosted lobby: the host's options go as sent.
+  relay.PinOptions({{"Victory", LuaBytes(LuaString("demoralization"))}});
+  const std::vector<std::uint8_t> payload = LuaBytes(
+    LuaTable({{LuaString("Type"), LuaString("GameOptions")}, {LuaString("Options"), LuaTable({{LuaString("Victory"), LuaString("sandbox")}})}})
+  );
+  const std::vector<std::uint8_t> options = LobbyMessage(moho::ELobbyMsg::LOBMSG_BroadcastScriptData, payload);
+  const SRelayed sent = Relay(relay, 1003, LobbyBody(1002, options), 1u);
+  ASSERT_EQ(sent.verdict, ELobbyRelayVerdict::Forward);
+  EXPECT_EQ(std::vector<std::uint8_t>(sent.frame.begin() + 3, sent.frame.end()), options);
+  EXPECT_EQ(relay.OptionsPinned(), 0u);
+}
+
+TEST(LobbyRelay, ReadsTheLobbyControl)
+{
+  EXPECT_EQ(faf::server::ReadLobbyControl("organiser"), faf::server::ELobbyControl::Organiser);
+  EXPECT_EQ(faf::server::ReadLobbyControl("player"), faf::server::ELobbyControl::Player);
+  EXPECT_FALSE(faf::server::ReadLobbyControl("Player").has_value());
+  EXPECT_FALSE(faf::server::ReadLobbyControl("").has_value());
+  // Organised is the default: WPR.49's rules hold unless the match says otherwise.
+  EXPECT_EQ(CLobbyRelay().Control(), faf::server::ELobbyControl::Organiser);
+}
+
+TEST(LobbyRelay, ScriptDataCarriesThePinnedOptions)
+{
+  CLobbyRelay relay;
+  relay.AddParticipant(1001);
+  relay.AddParticipant(1002);
+  relay.PinOptions({{"Victory", LuaBytes(LuaString("demoralization"))}});
+  const std::vector<std::uint8_t> payload = LuaBytes(
+    LuaTable({{LuaString("Type"), LuaString("GameOptions")}, {LuaString("Options"), LuaTable({{LuaString("Victory"), LuaString("sandbox")}})}})
+  );
+  const SRelayed relayed = Relay(relay, 1001, LobbyBody(1002, LobbyMessage(moho::ELobbyMsg::LOBMSG_BroadcastScriptData, payload)), 1u);
+  ASSERT_EQ(relayed.verdict, ELobbyRelayVerdict::Forward);
+  EXPECT_EQ(relay.OptionsPinned(), 1u);
+  // The frame: Lobby, varint 1001 (two bytes), then a whole message whose size says what it is now.
+  ASSERT_GT(relayed.frame.size(), 6u);
+  const std::vector<std::uint8_t> message(relayed.frame.begin() + 3, relayed.frame.end());
+  EXPECT_EQ(message[0], static_cast<std::uint8_t>(moho::ELobbyMsg::LOBMSG_BroadcastScriptData));
+  EXPECT_EQ(static_cast<std::size_t>(message[1]) | (static_cast<std::size_t>(message[2]) << 8u), message.size());
+  EXPECT_EQ(OptionIn(std::vector<std::uint8_t>(message.begin() + 3, message.end()), "Victory"), "demoralization");
+  // A message with nothing pinned in it goes as it came.
+  const std::vector<std::uint8_t> hello = LobbyMessage(moho::ELobbyMsg::LOBMSG_DirectScriptData, {104u, 105u, 33u});
+  const SRelayed same = Relay(relay, 1001, LobbyBody(1002, hello), 1u);
+  EXPECT_EQ(std::vector<std::uint8_t>(same.frame.begin() + 3, same.frame.end()), hello);
+  EXPECT_EQ(relay.OptionsPinned(), 1u);
+}
+
+// Plan WP17.8: the mods a player's game runs, and the UI mods a match allows.
+TEST(ContentCheck, ModReportsAndTheUiModPolicy)
+{
+  using faf::remote::SModEntry;
+  const std::vector<SModEntry> mods = {{false, "sim-mod-uid", ""}, {true, "ui-allowed", "3"}, {true, "ui-extra", "1.2"}};
+  const std::vector<std::uint8_t> message = faf::remote::EncodeModReport(mods);
+  EXPECT_EQ(message[0], static_cast<std::uint8_t>(faf::remote::net::ESeatMessage::ModReport));
+  std::vector<SModEntry> back;
+  ASSERT_TRUE(faf::remote::DecodeModReport(message, back));
+  EXPECT_EQ(back, mods);
+  // Cut short, a byte left over, a kind that isn't one: not a report.
+  EXPECT_FALSE(faf::remote::DecodeModReport(std::span<const std::uint8_t>(message).first(message.size() - 1u), back));
+  std::vector<std::uint8_t> longer = message;
+  longer.push_back(0u);
+  EXPECT_FALSE(faf::remote::DecodeModReport(longer, back));
+  std::vector<std::uint8_t> badKind = message;
+  badKind[2] = 7u; // the first mod's kind byte (after the message kind and the count)
+  EXPECT_FALSE(faf::remote::DecodeModReport(badKind, back));
+  // None at all is a report too.
+  ASSERT_TRUE(faf::remote::DecodeModReport(faf::remote::EncodeModReport({}), back));
+  EXPECT_TRUE(back.empty());
+  // An empty uid or one past the limit isn't sent.
+  ASSERT_TRUE(faf::remote::DecodeModReport(faf::remote::EncodeModReport({{true, "", "1"}, {true, std::string(201, 'x'), "1"}}), back));
+  EXPECT_TRUE(back.empty());
+
+  // UI mods outside the allowlist; sim mods are the launch's, never judged here.
+  EXPECT_EQ(faf::remote::UiModsOutside(mods, {"ui-allowed"}), (std::vector<std::string>{"ui-extra"}));
+  EXPECT_EQ(faf::remote::UiModsOutside(mods, {}), (std::vector<std::string>{"ui-allowed", "ui-extra"}));
+  EXPECT_TRUE(faf::remote::UiModsOutside(mods, {"ui-allowed", "ui-extra"}).empty());
+}
+
+// Plan WP2.6: content reports (remote/ContentCheck.h).
+TEST(ContentCheck, ReportsAndVerdicts)
+{
+  using faf::remote::EContentCheck;
+  using faf::remote::EContentVerdict;
+  using faf::remote::SContentReport;
+  const SContentReport report{0x0123456789ABCDEFull, 0xFEDCBA9876543210ull};
+  const std::vector<std::uint8_t> message = faf::remote::EncodeContentReport(report);
+  EXPECT_EQ(message.size(), 17u);
+  EXPECT_EQ(message[0], static_cast<std::uint8_t>(faf::remote::net::ESeatMessage::ContentReport));
+  SContentReport back;
+  ASSERT_TRUE(faf::remote::DecodeContentReport(message, back));
+  EXPECT_EQ(back, report);
+  EXPECT_FALSE(faf::remote::DecodeContentReport(std::span<const std::uint8_t>(message).first(16), back));
+  std::vector<std::uint8_t> other = message;
+  other[0] = static_cast<std::uint8_t>(faf::remote::net::ESeatMessage::Loaded);
+  EXPECT_FALSE(faf::remote::DecodeContentReport(other, back));
+
+  // The mod set whatever the order; not the empty set's hash for one mod.
+  EXPECT_EQ(faf::remote::HashModUids({"b", "a"}), faf::remote::HashModUids({"a", "b"}));
+  EXPECT_NE(faf::remote::HashModUids({"a"}), faf::remote::HashModUids({}));
+  EXPECT_NE(faf::remote::HashModUids({"ab"}), faf::remote::HashModUids({"a", "b"}));
+
+  const SContentReport differs{report.blueprints, report.mods + 1u};
+  EXPECT_EQ(faf::remote::JudgeContent(report, &report), EContentVerdict::Same);
+  EXPECT_EQ(faf::remote::JudgeContent(report, &differs), EContentVerdict::Differs);
+  EXPECT_EQ(faf::remote::JudgeContent(report, nullptr), EContentVerdict::Missing);
+  EXPECT_TRUE(faf::remote::RefusesPlayer(EContentCheck::Refuse, EContentVerdict::Differs));
+  EXPECT_TRUE(faf::remote::RefusesPlayer(EContentCheck::Refuse, EContentVerdict::Missing));
+  EXPECT_FALSE(faf::remote::RefusesPlayer(EContentCheck::Refuse, EContentVerdict::Same));
+  EXPECT_FALSE(faf::remote::RefusesPlayer(EContentCheck::Warn, EContentVerdict::Differs));
+  EXPECT_FALSE(faf::remote::RefusesPlayer(EContentCheck::Off, EContentVerdict::Missing));
+  EXPECT_TRUE(faf::remote::ReadContentCheck("refuse") == EContentCheck::Refuse);
+  EXPECT_TRUE(faf::remote::ReadContentCheck("warn") == EContentCheck::Warn);
+  EXPECT_TRUE(faf::remote::ReadContentCheck("off") == EContentCheck::Off);
+  EXPECT_FALSE(faf::remote::ReadContentCheck("Refuse").has_value());
+}
+
+TEST(ContentCheck, ModUidsFromTheLaunchsGameMods)
+{
+  // `GameMods` as FAF's lobby launches it (`Mods.GetGameMods`: a list of mod infos), in the byte form a launch holds.
+  const std::vector<std::uint8_t> bytes = LuaBytes(LuaTable({{LuaNumber(1.0f), LuaTable({{LuaString("uid"), LuaString("mod-b")}, {LuaString("name"), LuaString("B")}})},
+                                                              {LuaNumber(2.0f), LuaTable({{LuaString("uid"), LuaString("mod-a")}})}}));
+  std::vector<std::string> uids = faf::remote::ReadModUids(std::string(bytes.begin(), bytes.end()));
+  std::sort(uids.begin(), uids.end());
+  EXPECT_EQ(uids, (std::vector<std::string>{"mod-a", "mod-b"}));
+  // `{[uid] = true}`, as the lobby keeps them before the launch.
+  SLuaBytesValue yes;
+  yes.kind = SLuaBytesValue::EKind::Boolean;
+  yes.raw[0] = 1u;
+  const std::vector<std::uint8_t> byKey = LuaBytes(LuaTable({{LuaString("mod-c"), yes}}));
+  EXPECT_EQ(faf::remote::ReadModUids(std::string(byKey.begin(), byKey.end())), (std::vector<std::string>{"mod-c"}));
+  EXPECT_TRUE(faf::remote::ReadModUids({}).empty());
+  const std::vector<std::uint8_t> none = LuaBytes(LuaTable({}));
+  EXPECT_TRUE(faf::remote::ReadModUids(std::string(none.begin(), none.end())).empty());
+}
+
 // Plan WP2.2, WP2.12: the server's lobby signals (remote/net/LobbySignals.h, server/LobbySignaller.h).
 namespace
 {
@@ -688,15 +1167,107 @@ TEST(LobbySignaller, RolesWaitForTheHostThenEveryPairIsIntroduced)
   signaller.OnJoined(999, out);
   EXPECT_TRUE(out.empty());
 
-  // Bo leaves: the rest are told; the host leaves: the lobby can't go on.
+  // Bo leaves: the rest are told.
   signaller.OnLeft(1002, out);
   EXPECT_EQ(SignalsTo(out, 1001), (std::vector<std::string>{"4 1002 Bo "}));
   EXPECT_EQ(SignalsTo(out, 1003), (std::vector<std::string>{"4 1002 Bo "}));
+  // Plan WPR.50: the host leaves: Cy, the next who is here, hosts its lobby anew; nobody hears of Ann leaving.
   out.clear();
   signaller.OnLeft(1001, out);
-  EXPECT_TRUE(signaller.HostLeft());
-  EXPECT_EQ(SignalsTo(out, 1003), (std::vector<std::string>{"4 1001 Ann "}));
+  EXPECT_FALSE(signaller.HostLeft());
+  EXPECT_EQ(signaller.Host(), 1003);
+  EXPECT_EQ(SignalsTo(out, 1003), (std::vector<std::string>{"1 0 Cy /maps/m/m_scenario.lua"}));
+  EXPECT_EQ(out.size(), 1u);
   EXPECT_EQ(signaller.InLobby(), 1u);
+  // Cy leaves too: nobody is left to host.
+  out.clear();
+  signaller.OnLeft(1003, out);
+  EXPECT_TRUE(signaller.HostLeft());
+  EXPECT_EQ(signaller.Host(), 0);
+  EXPECT_TRUE(out.empty());
+}
+
+// Plan WPR.50: logical-host succession.
+TEST(LobbySignaller, TheNextInTheMatchTakesOverAndEveryoneStartsAgain)
+{
+  CLobbySignaller signaller("/maps/m/m_scenario.lua");
+  signaller.AddParticipant(1001, "Ann");
+  signaller.AddParticipant(1002, "Bo");
+  signaller.AddParticipant(1003, "Cy");
+  signaller.AddParticipant(1004, "Di");
+  std::vector<CLobbySignaller::SOutgoing> out;
+  for (const std::int32_t uid : {1001, 1002, 1003, 1004}) {
+    signaller.OnJoined(uid, out);
+  }
+  EXPECT_EQ(signaller.InLobby(), 4u);
+  out.clear();
+
+  // Ann goes quiet: Bo hosts; Cy and Di join Bo, the host hearing of each first, and meet each other again.
+  signaller.OnAway(1001, out);
+  EXPECT_EQ(signaller.Host(), 1002);
+  EXPECT_EQ(signaller.Successions(), 1u);
+  EXPECT_EQ(SignalsTo(out, 1002), (std::vector<std::string>{"1 0 Bo /maps/m/m_scenario.lua", "3 1003 Cy ", "3 1004 Di "}));
+  EXPECT_EQ(SignalsTo(out, 1003), (std::vector<std::string>{"2 1002 Cy Bo", "3 1004 Di "}));
+  EXPECT_EQ(SignalsTo(out, 1004), (std::vector<std::string>{"2 1002 Di Bo", "3 1003 Cy "}));
+  EXPECT_TRUE(SignalsTo(out, 1001).empty());
+  EXPECT_EQ(out.front().to, 1002);
+  EXPECT_EQ(signaller.InLobby(), 3u);
+
+  // Ann is heard again: she joins Bo's lobby as anyone would.
+  out.clear();
+  signaller.OnBack(1001, out);
+  EXPECT_EQ(signaller.Host(), 1002);
+  EXPECT_EQ(SignalsTo(out, 1002), (std::vector<std::string>{"3 1001 Ann "}));
+  EXPECT_EQ(SignalsTo(out, 1001), (std::vector<std::string>{"2 1002 Ann Bo", "3 1003 Cy ", "3 1004 Di "}));
+  EXPECT_EQ(out.front().to, 1002);
+  EXPECT_EQ(signaller.InLobby(), 4u);
+
+  // A joiner quiet and back keeps its role: nothing to say.
+  out.clear();
+  signaller.OnAway(1004, out);
+  signaller.OnBack(1004, out);
+  EXPECT_TRUE(out.empty());
+
+  // Bo leaves: after him in the match's order comes Cy (then Di, then round to Ann).
+  signaller.OnLeft(1002, out);
+  EXPECT_EQ(signaller.Host(), 1003);
+  EXPECT_EQ(SignalsTo(out, 1003).front(), "1 0 Cy /maps/m/m_scenario.lua");
+  EXPECT_EQ(SignalsTo(out, 1001).front(), "2 1003 Ann Cy");
+  EXPECT_EQ(SignalsTo(out, 1004).front(), "2 1003 Di Cy");
+}
+
+TEST(LobbySignaller, ASuccessorStillToComeOrAwayIsWaitedFor)
+{
+  CLobbySignaller signaller("");
+  signaller.AddParticipant(1001, "Ann");
+  signaller.AddParticipant(1002, "Bo");
+  signaller.AddParticipant(1003, "Cy");
+  std::vector<CLobbySignaller::SOutgoing> out;
+  signaller.OnJoined(1001, out);
+  signaller.OnJoined(1003, out);
+  out.clear();
+
+  // Ann leaves: Cy, who is here, comes before Bo, who isn't yet.
+  signaller.OnLeft(1001, out);
+  EXPECT_EQ(signaller.Host(), 1003);
+  EXPECT_EQ(SignalsTo(out, 1003), (std::vector<std::string>{"1 0 Cy "}));
+  out.clear();
+  signaller.OnJoined(1002, out);
+  EXPECT_EQ(SignalsTo(out, 1002), (std::vector<std::string>{"2 1003 Bo Cy"}));
+
+  // Cy goes quiet, then Bo: Bo took over, and was away when roles went out; nobody hears anything until Bo is back.
+  out.clear();
+  signaller.OnAway(1003, out);
+  EXPECT_EQ(signaller.Host(), 1002);
+  EXPECT_EQ(SignalsTo(out, 1002), (std::vector<std::string>{"1 0 Bo "}));
+  out.clear();
+  signaller.OnAway(1002, out);
+  EXPECT_EQ(signaller.Host(), 1003); // the next who hasn't left: Cy, away as well
+  EXPECT_TRUE(out.empty());
+  signaller.OnBack(1003, out);
+  EXPECT_EQ(signaller.Host(), 1003);
+  EXPECT_EQ(SignalsTo(out, 1003), (std::vector<std::string>{"1 0 Cy "}));
+  EXPECT_FALSE(signaller.HostLeft());
 }
 
 TEST(LobbySignaller, AJoinerWhoLeftBeforeItsRoleIsNotAnnounced)
@@ -728,6 +1299,7 @@ namespace
     CLobbyInbox inbox;
     std::vector<std::int32_t> gone;
     bool up = true;
+    int connectorsGone = 0;
 
     void SendLobbyFrame(const std::span<const std::uint8_t> frame) override { out.emplace_back(frame.begin(), frame.end()); }
     bool TakeLobbyFrame(std::vector<std::uint8_t>& frame) override { return inbox.TakeLobbyFrame(frame); }
@@ -737,6 +1309,7 @@ namespace
       uids.insert(uids.end(), gone.begin(), gone.end());
       gone.clear();
     }
+    void ConnectorGone() override { ++connectorsGone; }
   };
 
   /** What a lobby would receive: each message's type and bytes, and the connection it came on. */
@@ -930,14 +1503,19 @@ TEST(RelayConnector, TheHostAcceptsWhomTheServerNamesAndTheJoinerConnects)
   EXPECT_EQ(lobbyB.Count(kConnLostEof, bToA), 0u);
   EXPECT_EQ(connectorB->DroppedFrames(), 2u);
 
-  // The host leaves: Bo is told, and his connection to her ends once (CLobby: "HostLeft").
-  server.Left(1001);
-  ASSERT_TRUE(channelB.inbox.TakeSignal(signal));
-  EXPECT_EQ(signal.kind, ELobbySignal::DisconnectFromPeer);
-  channelB.gone.push_back(signal.uid);
+  // A participant the server says left: that connection ends once (CLobby: "PeerDisconnected").
+  channelB.gone.push_back(1001);
   connectorB->Pull();
   connectorB->Pull();
   EXPECT_EQ(lobbyB.Count(kConnLostEof, bToA), 1u);
+
+  // Plan WPR.50: the host leaves: Bo hosts now, and his game makes its lobby again; the old lobby's connector, destroyed
+  // with it, frees the channel for the new one.
+  server.Left(1001);
+  ASSERT_TRUE(channelB.inbox.TakeSignal(signal));
+  EXPECT_EQ(signal.kind, ELobbySignal::Host);
+  connectorB->Destroy();
+  EXPECT_EQ(channelB.connectorsGone, 1);
 
   // The channel gone: every connection of that side is lost, once.
   channelA.up = false;
@@ -946,7 +1524,7 @@ TEST(RelayConnector, TheHostAcceptsWhomTheServerNamesAndTheJoinerConnects)
   EXPECT_EQ(lobbyA.Count(kConnLostEof, aToB), 1u);
 
   connectorA->Destroy();
-  connectorB->Destroy();
+  EXPECT_EQ(channelA.connectorsGone, 1);
 }
 
 // Plan WP2.14: the host's launch against the match (server/LobbySignaller.h).
@@ -1008,4 +1586,129 @@ TEST(ViewMerge, OwnAndTeamLessBlipsOfOwnUnits)
   // No team frame (cut from the team): the own frame alone.
   CViewFrameMerger::Merge(own, nullptr, 5, merged, leftOut);
   EXPECT_EQ(merged.entities.size(), 2u);
+}
+
+// Plan WP10.7: a server-mode player's sim-speed limit: lockstep's formula over the median view cost, and its message.
+TEST(SpeedLimit, LockstepsFormulaAndTheMessage)
+{
+  using faf::remote::SpeedLimitOfBeatMs;
+  EXPECT_EQ(SpeedLimitOfBeatMs(100.0), 0);   // ten beats a second: +0
+  EXPECT_EQ(SpeedLimitOfBeatMs(10.0), 10);   // a hundred: +10
+  EXPECT_EQ(SpeedLimitOfBeatMs(50.0), 3);    // twenty: 10 log10(2) = 3.01, rounded down
+  EXPECT_EQ(SpeedLimitOfBeatMs(200.0), -4);  // five: -3.01, rounded down as RATE_GameRateToSpeed does
+  EXPECT_EQ(SpeedLimitOfBeatMs(0.0), faf::remote::kMaxSpeedLimit);
+  EXPECT_EQ(SpeedLimitOfBeatMs(100000.0), faf::remote::kMinSpeedLimit);
+  faf::remote::CSpeedMeter meter;
+  for (std::size_t i = 0; i + 1 < faf::remote::CSpeedMeter::kWindow; ++i) {
+    meter.Add(i % 8 == 0 ? 400.0 : 20.0); // a slow beat now and then
+  }
+  EXPECT_FALSE(meter.Limit().has_value()); // not before a full window
+  meter.Add(20.0);
+  EXPECT_EQ(meter.Limit(), std::optional<int>(6)); // the median, 20 ms: fifty beats a second, +6
+  // A machine at a step's edge: reported once it holds for a window, not at every flip.
+  faf::remote::CSpeedMeter edge;
+  int reports = 0;
+  std::optional<int> last;
+  for (int view = 0; view < 400; ++view) {
+    edge.Add(view % 2 == 0 ? 20.0 : 19.0); // +6 and +7 views alternate; the median holds +6 or +7
+    if (const std::optional<int> settled = edge.Settled(); settled) {
+      ++reports;
+      last = settled;
+    }
+  }
+  EXPECT_EQ(reports, 1);
+  EXPECT_TRUE(last == std::optional<int>(6) || last == std::optional<int>(7));
+  for (int view = 0; view < 100; ++view) {
+    edge.Add(200.0); // the machine slows: -4, reported once it holds
+    if (const std::optional<int> settled = edge.Settled(); settled) {
+      ++reports;
+      last = settled;
+    }
+  }
+  EXPECT_EQ(reports, 2);
+  EXPECT_EQ(last, std::optional<int>(-4));
+  for (const int limit : {-10, -3, 0, 7, 50}) {
+    EXPECT_EQ(faf::remote::DecodeSpeedLimit(faf::remote::EncodeSpeedLimit(limit)), std::optional<int>(limit)) << limit;
+  }
+  EXPECT_EQ(faf::remote::DecodeSpeedLimit(faf::remote::EncodeSpeedLimit(99)), std::optional<int>(50)); // clamped when sent
+  std::vector<std::uint8_t> past = faf::remote::EncodeSpeedLimit(0);
+  past[1] = 61u; // 51
+  EXPECT_FALSE(faf::remote::DecodeSpeedLimit(past).has_value());
+  std::vector<std::uint8_t> longer = faf::remote::EncodeSpeedLimit(0);
+  longer.push_back(0u);
+  EXPECT_FALSE(faf::remote::DecodeSpeedLimit(longer).has_value());
+  EXPECT_FALSE(faf::remote::DecodeSpeedLimit(std::vector<std::uint8_t>{static_cast<std::uint8_t>(faf::remote::net::ESeatMessage::Chat), 10u}).has_value());
+}
+
+// Plan WP11.1: SetArmyIndex's request and answer, and the cameras SetGeomCams sends.
+TEST(FocusAndCameras, MessagesRoundTrip)
+{
+  for (const int army : {-1, 0, 2, 15, faf::remote::kMaxFocusArmy}) {
+    EXPECT_EQ(faf::remote::DecodeFocusArmy(faf::remote::EncodeFocusArmy(army)), std::optional<int>(army)) << army;
+  }
+  std::vector<std::uint8_t> past = faf::remote::EncodeFocusArmy(0);
+  past[1] = static_cast<std::uint8_t>(faf::remote::kMaxFocusArmy + 2);
+  EXPECT_FALSE(faf::remote::DecodeFocusArmy(past).has_value());
+  std::vector<faf::remote::SCameraReport> cameras(2);
+  cameras[0].viewProjection[5] = 1.5f;
+  cameras[1].lodScale = 0.25f;
+  std::vector<faf::remote::SCameraReport> back;
+  ASSERT_TRUE(faf::remote::DecodeCameras(faf::remote::EncodeCameras(cameras), back));
+  EXPECT_EQ(back, cameras);
+  std::vector<faf::remote::SCameraReport> many(9);
+  ASSERT_TRUE(faf::remote::DecodeCameras(faf::remote::EncodeCameras(many), back));
+  EXPECT_EQ(back.size(), faf::remote::kMaxCameras); // at most four go
+  std::vector<std::uint8_t> cut = faf::remote::EncodeCameras(cameras);
+  cut.pop_back();
+  EXPECT_FALSE(faf::remote::DecodeCameras(cut, back));
+}
+
+// Plan WP10.7 step 2: a link that falls further behind holds the game a step at a time; one that catches up lets go a
+// step at a time; one that is far but steady (its delay, not its throughput) never holds it.
+TEST(LinkSpeed, FallingBehindHoldsTheGameSteadyDelayDoesNot)
+{
+  using faf::server::CLinkSpeedGovernor;
+  using faf::server::SLinkSample;
+  CLinkSpeedGovernor governor;
+  const auto at = [&governor](const double now, const int speed, const double behindSeconds) {
+    const SLinkSample seat{1002, behindSeconds, false};
+    return governor.Update(now, speed, 10, std::span<const SLinkSample>(&seat, 1u));
+  };
+  EXPECT_TRUE(at(0.0, 10, 3.0).empty());    // 3 s behind: the window starts
+  EXPECT_TRUE(at(5.0, 10, 9.0).empty());    // within the window: nothing
+  auto news = at(10.0, 10, 4.0);            // 4 s behind, 1 s further: held a step under +10
+  ASSERT_EQ(news.size(), 1u);
+  EXPECT_EQ(news[0].limit, std::optional<int>(9));
+  EXPECT_EQ(governor.Slowest(), (std::optional<std::pair<int, std::int32_t>>(std::make_pair(9, 1002))));
+  news = at(20.0, 9, 6.3);                  // still falling behind at +9: +8
+  ASSERT_EQ(news.size(), 1u);
+  EXPECT_EQ(news[0].limit, std::optional<int>(8));
+  EXPECT_TRUE(at(30.0, 8, 1.6).empty());    // caught up: calm window 1
+  EXPECT_TRUE(at(40.0, 8, 0.3).empty());     // 2
+  news = at(50.0, 8, 0.1);                   // 3: a step up
+  ASSERT_EQ(news.size(), 1u);
+  EXPECT_EQ(news[0].limit, std::optional<int>(9));
+  EXPECT_TRUE(at(60.0, 9, 0.1).empty());
+  EXPECT_TRUE(at(70.0, 9, 0.1).empty());
+  news = at(80.0, 9, 0.1);                   // the next step reaches the requested +10: the limit goes
+  ASSERT_EQ(news.size(), 1u);
+  EXPECT_FALSE(news[0].limit.has_value());
+  EXPECT_FALSE(governor.Slowest().has_value());
+  // A far link: 3 s behind every window, never further: no limit.
+  CLinkSpeedGovernor steady;
+  for (int window = 0; window < 10; ++window) {
+    const SLinkSample seat{1001, 3.0, false};
+    EXPECT_TRUE(steady.Update(10.0 * window, 10, 10, std::span<const SLinkSample>(&seat, 1u)).empty()) << window;
+  }
+  // A held link whose player leaves lets go of the game.
+  CLinkSpeedGovernor leaving;
+  SLinkSample seat{1003, 3.0, false};
+  (void)leaving.Update(0.0, 10, 10, std::span<const SLinkSample>(&seat, 1u));
+  seat.behindSeconds = 5.0;
+  ASSERT_EQ(leaving.Update(10.0, 10, 10, std::span<const SLinkSample>(&seat, 1u)).size(), 1u);
+  seat.gone = true;
+  news = leaving.Update(11.0, 9, 10, std::span<const SLinkSample>(&seat, 1u));
+  ASSERT_EQ(news.size(), 1u);
+  EXPECT_FALSE(news[0].limit.has_value());
+  EXPECT_FALSE(leaving.Slowest().has_value());
 }

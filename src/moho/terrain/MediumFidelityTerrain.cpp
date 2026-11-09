@@ -1,4 +1,6 @@
 #include "moho/terrain/MediumFidelityTerrain.h"
+#include "moho/terrain/SplatChunkRenderer.h"
+#include "moho/terrain/SplatBudget.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,6 +19,7 @@
 #include "moho/render/CWldTerrainDecal.h"
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/d3d/CD3DDevice.h"
+#include "moho/render/WRenViewport.h"
 #include "moho/render/d3d/CD3DIndexSheet.h"
 #include "moho/render/d3d/CD3DTextureBatcher.h"
 #include "moho/render/d3d/RD3DTextureResource.h"
@@ -31,6 +34,7 @@
 #include "moho/terrain/TerrainShaderVars.h"
 #include "moho/terrain/splat/CWldSplat.h"
 #include "moho/terrain/water/CWaterShaderProperties.h"
+#include "moho/terrain/water/WaterBodySurfaces.h"
 #include "moho/terrain/water/WaterFactory.h"
 #include "moho/terrain/water/WaterShaderVars.h"
 #include "moho/render/d3d/CD3DRenderTarget.h"
@@ -53,7 +57,6 @@ namespace
   constexpr std::int32_t kSkirtMaxIndexCount = 199998;
   constexpr std::int32_t kTriangleListPrimitiveType = 4;
   constexpr float kMinDecalAlpha = 0.0039215689f;
-  constexpr std::int32_t kMaxSplatsPerFrame = 2500;
 
   // ----- ren_ShowDirtyTerrain debug-overlay helpers (FUN_00805F10) -----
 
@@ -449,8 +452,8 @@ namespace moho
 
     shaderVars.normalTexture.SetRenderTargetTexture(terrainNormalTexture);
 
-    const auto* const activeMap = WLD_GetActiveSession()->mWldMap;
-    const CHeightField* const heightField = activeMap->mTerrainRes->mMap->mHeightField.get();
+    // 0x008052A7: `mov eax, [sWldMap]`, the map the renderer draws (a session's, or the map editor's).
+    const CHeightField* const heightField = REN_GetTerrainRes()->mMap->mHeightField.get();
 
     const float terrainScale[4] = {
       1.0f / static_cast<float>(heightField->width - 1),
@@ -1014,6 +1017,17 @@ namespace moho
     }
 
     // Copy the whole splat lane into the overlay vertex sheet's stream buffer.
+    // Keep the original single-draw path for ordinary views. Only overflow
+    // uses pass-major chunks, so every existing sheet/index stays in bounds.
+    if (splatVertexCount > 10000U) {
+      D3D_GetDevice()->SelectTechnique("TSplats");
+      GetTerrainShaderVars().decalAlbedoTexture.GetTexture(
+        boost::static_pointer_cast<CD3DDynamicTextureSheet>(sMediumFidelityTextureBatcher->GetCompositeTexture()));
+      DrawSplatChunksPassMajor(
+        D3D_GetDevice(), mOverlayVertexSheet, mOverlayIndexSheet, mSplatVertices.data(), splatVertexCount, 2500);
+      return;
+    }
+
     void* const lockedVertices =
       mOverlayVertexSheet->GetVertStream(0U)->Lock(0, static_cast<std::int32_t>(splatVertexCount), false, true);
     // Raw GPU upload: splat vertex blob into the locked stream.
@@ -1438,7 +1452,9 @@ namespace moho
     // has no water enabled). The runtime map object at mTerrainResource->mMap is
     // the same object read by the binary at [terrainRes + 4].
     const STIMap& map = *mTerrainResource->mMap;
-    const float waterElevation = map.mWaterEnabled ? map.mWaterElevation : kWaterElevationSentinel;
+    // Engine addition (water bodies): the highest level, as HighFidelityTerrain::DrawNormals.
+    const float waterElevation = map.HasWaterBodies() ? WaterBodyTerrainShaderLevel(map)
+                                                      : (map.mWaterEnabled ? map.mWaterElevation : kWaterElevationSentinel);
     if (shaderVars.waterElevation.Exists()) {
       shaderVars.waterElevation.SetFloat(waterElevation);
     }
@@ -1640,7 +1656,7 @@ namespace moho
         }
       }
 
-      mSplatVertices.ResetStorageToInline();
+      auto splatOutputBudget = PrepareSplatOutput(mSplatVertices, ren_SplatBudgetTier);
 
       if (!minimapPass && ren_Splats) {
         auto* const decalManager = static_cast<CDecalManager*>(terrainRes->GetDecalManager());
@@ -1652,7 +1668,7 @@ namespace moho
         // the walk runs once more, so only this frame's textures hold places.
         for (bool mayRestart = true;; mayRestart = false) {
           bool restart = false;
-          std::int32_t splatBudget = 0;
+          std::size_t splatBudget = 0;
           for (CWldTerrainDecal* const decalEntry : visibleSplats) {
             auto* const splat = static_cast<CWldSplat*>(decalEntry);
 
@@ -1664,7 +1680,8 @@ namespace moho
             if (worldDistance > splat->mCutoffLOD) {
               continue;
             }
-            if (++splatBudget >= kMaxSplatsPerFrame) {
+            if (splatBudget++ >= splatOutputBudget.available
+              && !TryGrowSplatOutput(mSplatVertices, splatOutputBudget)) {
               break;
             }
 
@@ -1705,7 +1722,9 @@ namespace moho
             break;
           }
           REN_ResetSplatTextureBatcher(sMediumFidelityTextureBatcher);
-          mSplatVertices.ResetStorageToInline();
+          // Rebuild every UV after the atlas reset, retaining capacity and the
+          // per-view budget so restart does not bypass guarded growth.
+          mSplatVertices.Clear();
         }
       }
 

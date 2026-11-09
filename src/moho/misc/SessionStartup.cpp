@@ -1,4 +1,5 @@
 #include "moho/lua/CScrLuaInitForm.h"
+#include "moho/misc/FileWriteExact.h"
 #include "moho/misc/SessionStartup.h"
 
 #include <Windows.h>
@@ -78,16 +79,6 @@ namespace
   [[nodiscard]] fa::string MakeTempSavePath(const fa::string& basePath)
   {
     return basePath + ".NEW";
-  }
-  [[nodiscard]] bool WriteExact(std::FILE* const file, const void* const data, const std::size_t byteCount)
-  {
-    if (!file) {
-      return false;
-    }
-    if (byteCount == 0) {
-      return true;
-    }
-    return std::fwrite(data, byteCount, 1, file) == 1;
   }
 } // namespace
 
@@ -330,6 +321,8 @@ namespace moho
     }
   }
 
+  bool gSessionCheats = false; // engine addition, SessionStartup.h
+
   /**
    * Address: 0x0088CBC0 (FUN_0088CBC0)
    * Mangled:
@@ -342,7 +335,7 @@ namespace moho
   {
     boost::shared_ptr<LaunchInfoNew> launchInfo(new LaunchInfoNew());
     launchInfo->mCommandSources.mOriginalSource = 0;
-    launchInfo->mCheatsEnabled = USER_DebugFacilitiesEnabled();
+    launchInfo->mCheatsEnabled = gSessionCheats || USER_DebugFacilitiesEnabled();
 
     const LuaPlus::LuaObject scenarioInfo = launchData["scenarioInfo"];
     launchInfo->mScenarioInfo = SCR_ToString(scenarioInfo);

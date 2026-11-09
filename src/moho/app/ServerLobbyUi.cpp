@@ -110,7 +110,13 @@ namespace
   void CServerLobbyTask::CreateLobby(const SLobbySignal& signal)
   {
     if (mLobby != nullptr) {
-      throw std::runtime_error("Lobby already exists.");
+      // Plan WPR.50: a role while this game has a lobby: the logical host changed (the old one left or went quiet),
+      // and a lobby can't change its host. The lobby script's `GameLaunched` closes the screen and destroys the
+      // lobby (its connector with it) without leaving the game, as a launch does; the new lobby is made below.
+      gpg::Logf("SERVER LOBBY: the lobby starts again with a new host.");
+      moho::LOBBY_ServerSessionLaunched();
+      delete mLobby;
+      mLobby = nullptr;
     }
     // As `CGpgNetInterface::CreateLobby` (0x007B7DE0): the user state to the UI manager, the lobby UI state, then
     // onlineprovider.lua's `CreateLobby(autolaunch, "UDP", port, name, uid, natTraversal, hasSupcom)`.
@@ -118,6 +124,12 @@ namespace
     moho::sUIState = moho::UIS_lobby;
     if (state == nullptr || !moho::UI_GetManager()->SetNewLuaState(state)) {
       throw std::runtime_error("UI_GetManager()->SetNewLuaState() failed.");
+    }
+    // Plan WP17.6: the lobby screen's hook (data/fafengine/lua/ui/lobby/lobby.lua) reads who runs this lobby.
+    if ((signal.flags & faf::remote::net::kLobbySignalOrganised) != 0) {
+      state->GetGlobals().SetString("ServerLobbyControl", "organiser");
+    } else {
+      state->GetGlobals().SetNil("ServerLobbyControl");
     }
     constexpr const char* kOnlineProviderModule = "/lua/multiplayer/onlineprovider.lua";
     const LuaPlus::LuaObject provider = moho::SCR_Import(state, gpg::StrArg(kOnlineProviderModule));

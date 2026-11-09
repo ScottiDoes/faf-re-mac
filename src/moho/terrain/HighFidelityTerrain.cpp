@@ -1,4 +1,8 @@
 #include "moho/terrain/HighFidelityTerrain.h"
+#include "moho/render/WRenViewport.h"
+#include "moho/terrain/SplatChunkRenderer.h"
+#include "moho/terrain/SplatBudget.h"
+#include "moho/terrain/TerrainTessellation.h"
 #include <cstdio>
 
 #include <algorithm>
@@ -42,6 +46,7 @@
 #include "moho/terrain/StratumMaterial.h"
 #include "moho/terrain/TerrainDynamicTextureHelpers.h"
 #include "moho/terrain/TerrainShaderVars.h"
+#include "moho/terrain/water/WaterBodySurfaces.h"
 #include "moho/terrain/water/WaterFactory.h"
 #include "moho/terrain/water/WaterShaderVars.h"
 #include "moho/terrain/water/WaterSurface.h"
@@ -66,7 +71,6 @@ namespace
   constexpr float kMinDecalAlpha = 0.0039215689f;
 
 
-  constexpr std::int32_t kMaxSplatsPerFrame = 2500;
   constexpr int kNoiseFillTextureFormat = 2;
 
   [[nodiscard]] std::int32_t FloorToInt(const float value) noexcept
@@ -480,11 +484,12 @@ namespace moho
     SetShaderVarMem(shaderVars.stratum5NormalTile, 4U, &strata.mStratum5NormalTexture.mScaleX);
     SetShaderVarMem(shaderVars.stratum6NormalTile, 4U, &strata.mStratum6NormalTexture.mScaleX);
     SetShaderVarMem(shaderVars.stratum7NormalTile, 4U, &strata.mStratum7NormalTexture.mScaleX);
+    TERRAIN_SetTessellationLayers(strata); // engine addition (ren_TerrainTessellation)
 
     shaderVars.normalTexture.SetRenderTargetTexture(terrainNormalTexture);
 
-    const auto* const activeMap = WLD_GetActiveSession()->mWldMap;
-    const CHeightField* const heightField = activeMap->mTerrainRes->mMap->mHeightField.get();
+    // 0x00801277: `mov eax, [sWldMap]`, the map the renderer draws (a session's, or the map editor's).
+    const CHeightField* const heightField = REN_GetTerrainRes()->mMap->mHeightField.get();
 
     const float terrainScale[4] = {
       1.0f / static_cast<float>(heightField->width - 1),
@@ -664,8 +669,13 @@ namespace moho
       return;
     }
 
-    if (forceRegenerate != 0) {
+    // Engine addition (water bodies): the session installs the bodies after this terrain was
+    // created, so the shoreline is generated again when the map's bodies are not the ones it has.
+    static std::uint32_t sShorelineWaterBodies = 0;
+    const std::uint32_t waterBodies = WaterBodiesGeneration(*mTerrainResource->mMap);
+    if (forceRegenerate != 0 || waterBodies != sShorelineWaterBodies) {
       mShoreline.Generate(mTerrainResource);
+      sShorelineWaterBodies = waterBodies;
     }
 
     mCamera = camera;
@@ -814,7 +824,7 @@ namespace moho
         }
       }
 
-      mSplatVertices.ResetStorageToInline();
+      auto splatOutputBudget = PrepareSplatOutput(mSplatVertices, ren_SplatBudgetTier);
 
       if (!minimapPass && ren_Splats) {
         auto* const decalManager = static_cast<CDecalManager*>(terrainRes->GetDecalManager());
@@ -828,7 +838,7 @@ namespace moho
         // the walk runs once more, so only this frame's textures hold places.
         for (bool mayRestart = true;; mayRestart = false) {
           bool restart = false;
-          std::int32_t splatBudget = 0;
+          std::size_t splatBudget = 0;
           for (CWldTerrainDecal* const decalEntry : visibleSplats) {
             auto* const splat = static_cast<CWldSplat*>(decalEntry);
 
@@ -840,7 +850,8 @@ namespace moho
             if (worldDistance > splat->mCutoffLOD) {
               continue;
             }
-            if (++splatBudget >= kMaxSplatsPerFrame) {
+            if (splatBudget++ >= splatOutputBudget.available
+              && !TryGrowSplatOutput(mSplatVertices, splatOutputBudget)) {
               break;
             }
 
@@ -882,7 +893,9 @@ namespace moho
             break;
           }
           REN_ResetSplatTextureBatcher(sHighFidelityTextureBatcher);
-          splatVertices.ResetStorageToInline();
+          // Rebuild every UV after the atlas reset, retaining capacity and the
+          // per-view budget so restart does not bypass guarded growth.
+          splatVertices.Clear();
         }
       }
 
@@ -1208,6 +1221,17 @@ namespace moho
       return;
     }
 
+    // Keep the original single-draw path for ordinary views. Only overflow
+    // uses pass-major chunks, so every existing sheet/index stays in bounds.
+    if (splatVertexCount > 10000U) {
+      D3D_GetDevice()->SelectTechnique("TSplats");
+      GetTerrainShaderVars().decalAlbedoTexture.GetTexture(
+        boost::static_pointer_cast<CD3DDynamicTextureSheet>(sHighFidelityTextureBatcher->GetCompositeTexture()));
+      DrawSplatChunksPassMajor(
+        D3D_GetDevice(), mDynamicVertexSheet, mDynamicIndexSheet, mSplatVertices.data(), splatVertexCount, 2500);
+      return;
+    }
+
     void* const lockedVertices =
       mDynamicVertexSheet->GetVertStream(0U)->Lock(0, static_cast<std::int32_t>(splatVertexCount), false, true);
     std::copy_n(splatVertices.data(), splatVertexCount, static_cast<CWldSplat::SplatVertex*>(lockedVertices));
@@ -1346,9 +1370,12 @@ namespace moho
     constexpr float kNoWaterElevation = -10000.0F;
     const STIMap& map = *mTerrainResource->mMap;
 
+    // Engine addition (water bodies): the highest level, so every lake bed is shaded as under
+    // water (WaterBodyTerrainShaderLevel); exactly the sea's level on a map without bodies.
     if (shaderVars.waterElevation.Exists()) {
       shaderVars.waterElevation.SetFloat(
-        map.mWaterEnabled ? map.mWaterElevation : kNoWaterElevation);
+        map.HasWaterBodies() ? WaterBodyTerrainShaderLevel(map)
+                             : (map.mWaterEnabled ? map.mWaterElevation : kNoWaterElevation));
     }
     if (shaderVars.waterElevationDeep.Exists()) {
       shaderVars.waterElevationDeep.SetFloat(
@@ -1417,6 +1444,14 @@ namespace moho
       CWldTerrainDecal& decal = *command.decal;
       if (decal.mType != WldTerrainDecalType_WaterAlbedo) {
         continue;
+      }
+
+      // Engine addition (water bodies): the shader lifts a water decal to `WaterElevation`, so a
+      // decal takes the level of the water at its centre rather than the terrain pass's highest.
+      if (const STIMap& map = *mTerrainResource->mMap; map.HasWaterBodies() && shaderVars.waterElevation.Exists()) {
+        shaderVars.waterElevation.SetFloat(map.GetWaterElevationAt(
+          (decal.mBoundsMinX + decal.mBoundsMaxX) * 0.5F, (decal.mBoundsMinZ + decal.mBoundsMaxZ) * 0.5F
+        ));
       }
 
       if (shaderVars.decalMatrix.Exists()) {
@@ -1761,11 +1796,7 @@ namespace moho
     batcher->SetProjectionMatrix(camera.projection);
     batcher->SetViewMatrix(camera.view);
 
-    IWldTerrainRes* heightFieldSource = nullptr;
-    if (CWldSession* const activeSession = WLD_GetActiveSession();
-        activeSession != nullptr && activeSession->mWldMap != nullptr) {
-      heightFieldSource = activeSession->mWldMap->mTerrainRes;
-    }
+    IWldTerrainRes* const heightFieldSource = REN_GetTerrainRes();
 
     const CHeightField* const heightField = heightFieldSource->mMap->mHeightField.get();
 
@@ -1784,11 +1815,7 @@ namespace moho
     // after the bind (0x00801FE6-0x00802023), not at end of scope.
     batcher->SetTexture(CD3DBatchTexture::FromSolidColor(kDirtyRectOverlayColor));
 
-    IWldTerrainRes* dirtyRectSource = nullptr;
-    if (CWldSession* const activeSession = WLD_GetActiveSession();
-        activeSession != nullptr && activeSession->mWldMap != nullptr) {
-      dirtyRectSource = activeSession->mWldMap->mTerrainRes;
-    }
+    IWldTerrainRes* const dirtyRectSource = REN_GetTerrainRes();
 
     for (const gpg::Rect2i& dirtyRect : dirtyRectSource->GetDebugDirtyRects()) {
       if (!DirtyRectVisibleInCameraFootprint(cameraFootprint, dirtyRect)) {
@@ -1823,11 +1850,8 @@ namespace moho
       return;
     }
 
-    IWldTerrainRes* terrainRes = nullptr;
-    if (CWldSession* const activeSession = WLD_GetActiveSession();
-        activeSession != nullptr && activeSession->mWldMap != nullptr) {
-      terrainRes = activeSession->mWldMap->mTerrainRes;
-    }
+    // `sWldMap`, as DrawDirtyTerrain above notes.
+    IWldTerrainRes* const terrainRes = REN_GetTerrainRes();
 
     CD3DDevice* const device = D3D_GetDevice();
     device->SelectFxFile("water2");
@@ -1837,6 +1861,26 @@ namespace moho
     GetWater2ProjectionShorelineShaderVar().SetMatrix4x4(&camera->projection);
 
     const STIMap* const map = terrainRes->mMap;
+    std::int32_t primitiveType = kTriangleListPrimitiveToken;
+
+    // Engine addition (water bodies): each group of cells at its own water's level.
+    if (const std::vector<SShorelineLevelRun>* const runs = shoreline->LevelRuns(); runs != nullptr) {
+      for (const SShorelineLevelRun& run : *runs) {
+        if (run.vertexCount <= 0) {
+          continue;
+        }
+        GetWater2WaterElevationTShorelineShaderVar().SetFloat(run.level);
+        SD3DVertexRange runView{};
+        runView.sheet = shoreline->mVertexSheet.get();
+        // DrawPrimitiveList draws `endVertex - startVertex + 1` vertices from `baseVertex`.
+        runView.startVertex = 0;
+        runView.baseVertex = run.firstVertex;
+        runView.endVertex = run.vertexCount - 1;
+        (void)device->DrawPrimitiveList(&runView, &primitiveType);
+      }
+      return;
+    }
+
     const float waterElevation = (map->mWaterEnabled != 0) ? map->mWaterElevation : kDisabledWaterElevation;
     GetWater2WaterElevationTShorelineShaderVar().SetFloat(waterElevation);
 
@@ -1846,7 +1890,6 @@ namespace moho
     shorelineView.baseVertex = 0;
     shorelineView.endVertex = shoreline->mShorelineTris * 3 - 1;
 
-    std::int32_t primitiveType = kTriangleListPrimitiveToken;
     (void)device->DrawPrimitiveList(&shorelineView, &primitiveType);
   }
 

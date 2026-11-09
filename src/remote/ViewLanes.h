@@ -60,6 +60,7 @@ namespace faf::remote
       const wire::BitWriter& lua;
       bool ok;
       const wire::BitWriter* team = nullptr; // the player's team's frame, with teams and not cut from it
+      const wire::BitWriter* poses = nullptr; // with `EnablePoses`: the units' bones (wire/PoseLane.h)
       std::size_t teamEntities = 0;
       bool fresh = false; // `RequestFresh`: every lane but Lua's is whole, for a client that holds nothing
       // Plan WPR.30, every `kCheckEveryBeats`: what the client should hold after this beat, by `CViewFrames::HeldFrameHash`.
@@ -87,6 +88,8 @@ namespace faf::remote
     std::size_t PrepareSideJobs(moho::Sim& sim) override;
     void RunSideJob(std::size_t index) override;
     void OnViewReady(std::size_t army) override { Send(army); }
+    /** Plan WP13.6: a player now watching everything gets their frames whole (with the observer view as their team's). */
+    void OnWatchingEverything(std::size_t army) override { RequestFresh(army); }
 
     /** A view's lanes are encoded. Without a pipeline on a sim worker or the sim thread, with one on its threads. */
     virtual void OnLanesEncoded(std::size_t army, const SLanes& lanes)
@@ -120,6 +123,8 @@ namespace faf::remote
       std::vector<std::uint16_t> gridsNext;
       wire::BitWriter lua;              // this beat's Lua lane, which is ready before the others
       wire::BitWriter teamFrame;        // a team's view: this beat's frame, for its players' messages
+      std::vector<std::uint32_t> poseUnits;     // the units it held last beat (`HeldUnitIds`), for the pose lane
+      std::vector<std::uint32_t> poseUnitsNext;
       std::uint64_t teamHash = 0;       // and on a check's beat its hash
       bool fresh = false;               // `RequestFresh`
       std::uint32_t bytes = 0;          // this beat

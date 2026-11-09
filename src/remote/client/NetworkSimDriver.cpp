@@ -1,6 +1,13 @@
 #include "remote/client/NetworkSimDriver.h"
+#include "remote/FocusAndCameras.h"
+#include "moho/render/camera/GeomCamera3.h"
+#include "remote/SpeedLimit.h"
+#include "remote/client/ServerLaneMeter.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstring>
+#include <optional>
 #include <utility>
 
 #include "gpg/core/streams/MemBufferStream.h"
@@ -17,6 +24,8 @@
 #include "moho/sim/SSTIArmyVariableData.h"
 #include "moho/sim/SimDriver.h"
 #include "remote/ArmyRecords.h"
+#include "moho/net/IClientMgrUIInterface.h"
+#include "remote/SeatRoster.h"
 #include "remote/client/ServerConnect.h"
 #include "remote/net/Datagram.h"
 #include "remote/net/GameLinks.h"
@@ -110,17 +119,57 @@ namespace faf::remote::client
     const SServerViewStats& views = mViews ? mViews->Stats() : noStats;
     gpg::Logf(
       "server driver %s: %llu views (%llu applied, %llu bad, %llu frame failures), beat %d, %llu commands sent, answers %llu applied / "
-      "%llu refused / %llu dropped, %llu Lua lanes bad, %llu without their LuaSync; session tables: %llu records (%llu bad, %llu resets), "
-      "%zu deposits, %llu terrain edits, %llu unknown ids",
+      "%llu refused / %llu dropped (issue lead %d beats, largest %d, %llu applied past their beat), %llu Lua lanes bad, "
+      "%llu without their LuaSync; session tables: %llu records (%llu bad, %llu resets), "
+      "%zu deposits, %llu terrain edits, %llu unknown ids; clock: server rate %+d, %.1f beats/s on its clock, %.1f arriving, "
+      "backlog %lld, skew %.2f; roster: %llu (%llu bad), %zu clients; chat: %llu sent, %llu received, %llu bad; "
+      "KB by lane: entities %.0f, armies %.0f, grids %.0f, Lua %.0f, poses %.0f",
       when, static_cast<unsigned long long>(mViewsTaken), static_cast<unsigned long long>(views.applied), static_cast<unsigned long long>(mViewsBad),
       static_cast<unsigned long long>(views.frameFailures), static_cast<int>(mLastBeat), static_cast<unsigned long long>(mCommandsSent),
       static_cast<unsigned long long>(mAnswers[0]), static_cast<unsigned long long>(mAnswers[1]), static_cast<unsigned long long>(mAnswers[2]),
+      static_cast<int>(mIssueLead), static_cast<int>(mLargestLead), static_cast<unsigned long long>(mAnswersPastEstimate),
       static_cast<unsigned long long>(mLuaLanesBad), static_cast<unsigned long long>(mLuaMissing),
       static_cast<unsigned long long>(views.tableRecords), static_cast<unsigned long long>(views.tableFailures + mTablesBad),
       static_cast<unsigned long long>(views.tableResets), mViews ? mViews->Tables().Deposits().size() : std::size_t{0},
       static_cast<unsigned long long>(mViews ? mViews->RebuildStats().terrainEdits : 0u),
-      static_cast<unsigned long long>(mViews ? mViews->RebuildStats().unknownTableIds : 0u)
+      static_cast<unsigned long long>(mViews ? mViews->RebuildStats().unknownTableIds : 0u),
+      static_cast<int>(mClock.ServerSimRate()), mClock.ServerBeatsPerSecond(), mClock.ArrivalBeatsPerSecond(),
+      static_cast<long long>(mClock.Backlog()), mClock.Skew(), static_cast<unsigned long long>(mRosters),
+      static_cast<unsigned long long>(mRostersBad), mClientManager.RosterCount(),
+      static_cast<unsigned long long>(mChatSent), static_cast<unsigned long long>(mChatReceived), static_cast<unsigned long long>(mChatBad),
+      static_cast<double>(mLaneBytes[0]) / 1024.0, static_cast<double>(mLaneBytes[1]) / 1024.0, static_cast<double>(mLaneBytes[2]) / 1024.0,
+      static_cast<double>(mLaneBytes[3]) / 1024.0, static_cast<double>(mLaneBytes[4]) / 1024.0
     );
+  }
+
+  void CNetworkSimDriver::SendChat(const int clientIndex, const gpg::MemBuffer<const char>& data)
+  {
+    const moho::IClient* const local = mClientManager.GetLocalClient();
+    if (local != nullptr && local->GetIndex() == clientIndex) {
+      // To itself (a line to everyone includes the sender): as a lockstep game's local client shows it.
+      DeliverChat(clientIndex, std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(data.mBegin), data.Size()));
+      return;
+    }
+    if (data.Size() > kMaxChatBytes) {
+      ++mChatBad;
+      return;
+    }
+    const std::vector<std::uint8_t> message =
+      EncodeChatMessage(clientIndex, std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(data.mBegin), data.Size()));
+    if (SendServerGameMessage(message)) {
+      ++mChatSent;
+    }
+  }
+
+  void CNetworkSimDriver::DeliverChat(const int senderIndex, const std::span<const std::uint8_t> payload)
+  {
+    const CRosterClient* const sender = mClientManager.RosterClient(senderIndex);
+    if (sender == nullptr || mClientManager.mInterface == nullptr) {
+      ++mChatBad;
+      return;
+    }
+    ++mChatReceived;
+    mClientManager.mInterface->ReceiveChat(sender, gpg::CopyMemBuffer(payload.data(), payload.size()));
   }
 
   void CNetworkSimDriver::Take(const std::vector<std::uint8_t>& message)
@@ -206,10 +255,60 @@ namespace faf::remote::client
     case net::ESeatMessage::CommandAnswer: {
       // Plan WP3.7: the beat the command went in (or refused, or dropped), for each command in the order sent.
       net::ByteReader reader(message.data() + 1, message.size() - 1u);
-      (void)reader.Varint();
+      const auto beat = static_cast<std::int32_t>(reader.Varint());
       const std::uint8_t answer = reader.Byte();
-      if (reader.Ok() && answer <= 2u) {
-        ++mAnswers[answer];
+      if (!reader.Ok() || answer > 2u) {
+        return;
+      }
+      ++mAnswers[answer];
+      if (mSentAtShown.empty()) {
+        return;
+      }
+      const std::int32_t shownAtSending = mSentAtShown.front();
+      mSentAtShown.pop_front();
+      if (answer != 0u) {
+        return; // refused or dropped: no beat
+      }
+      // #99: how far ahead of the beat shown at sending it went in; the issue beat follows the largest lately.
+      const std::int32_t lead = beat - shownAtSending;
+      mAnswersPastEstimate += lead > mIssueLead ? 1u : 0u;
+      mLargestLead = std::max(mLargestLead, lead);
+      mRecentLeads.push_back(lead);
+      if (mRecentLeads.size() > kLeadWindow) {
+        mRecentLeads.pop_front();
+      }
+      mIssueLead = std::max<std::int32_t>(1, *std::max_element(mRecentLeads.begin(), mRecentLeads.end()) + 1);
+      return;
+    }
+    case net::ESeatMessage::Roster: {
+      // Plan WP11.4: from now on the session's roster questions are answered from the server's.
+      const std::optional<wire::SRoster> roster = DecodeRosterMessage(message);
+      if (!roster) {
+        ++mRostersBad;
+        return;
+      }
+      ++mRosters;
+      mClientManager.ApplyRoster(*roster, [this](const int index, const gpg::MemBuffer<const char> data) { SendChat(index, data); });
+      if (mRosters == 1u) {
+        gpg::Logf("server driver: roster from the server, %zu clients, this one %d", roster->entries.size(), static_cast<int>(roster->localIndex));
+      }
+      return;
+    }
+    case net::ESeatMessage::Chat: {
+      int sender = 0;
+      std::span<const std::uint8_t> payload;
+      if (!DecodeChatMessage(message, sender, payload)) {
+        ++mChatBad;
+        return;
+      }
+      DeliverChat(sender, payload);
+      return;
+    }
+    case net::ESeatMessage::FocusArmy: {
+      // Plan WP11.1: the army the server grants; the client shows it from the next view on.
+      if (const std::optional<int> granted = DecodeFocusArmy(message); granted) {
+        mFocusGranted.store(*granted, std::memory_order_relaxed);
+        gpg::Logf("server driver: the server grants focus on army %d", *granted);
       }
       return;
     }
@@ -239,20 +338,48 @@ namespace faf::remote::client
   void CNetworkSimDriver::QueueView(const SViewMessage& view, const std::span<const std::uint8_t> lua)
   {
     ++mViewsTaken;
+    // Plan WP10.10: this view's bytes by lane, for the network panel and the summary.
+    std::array<std::uint64_t, kServerLaneCount> laneBytes{};
+    laneBytes[static_cast<std::size_t>(EServerLane::Entities)] = view.own.size() + view.team.size();
+    laneBytes[static_cast<std::size_t>(EServerLane::Armies)] = view.armies.size();
+    laneBytes[static_cast<std::size_t>(EServerLane::Grids)] = view.grids.size();
+    laneBytes[static_cast<std::size_t>(EServerLane::Lua)] = lua.size();
+    laneBytes[static_cast<std::size_t>(EServerLane::Poses)] = view.hasPoses ? view.poses.size() : 0u;
+    if (mViewsTaken == 1u) {
+      CServerLaneMeter::Get().Reset(); // a new game
+    }
+    CServerLaneMeter::Get().Record(laneBytes);
+    for (std::size_t lane = 0; lane < kServerLaneCount; ++lane) {
+      mLaneBytes[lane] += laneBytes[lane];
+    }
     auto packet = std::make_unique<moho::SSyncData>();
     packet->mCurBeat = static_cast<std::int32_t>(view.beat);
     packet->mCurTick = static_cast<std::int32_t>(view.beat);
     packet->mAdvanced = true;
-    packet->mFocusArmy = mViews->Info().army;
+    packet->mFocusArmy = mFocusGranted.load(std::memory_order_relaxed) == kNoFocusGranted ? mViews->Info().army : mFocusGranted.load(std::memory_order_relaxed);
     if (!mArmiesGiven) {
       mArmiesGiven = true;
       for (const moho::SSTIArmyConstantData& army : mArmyConstants) {
         packet->mNewGrids.push_back(army);
       }
     }
+    const auto applyStart = std::chrono::steady_clock::now();
     if (!mViews->Apply(view, *packet)) {
       ++mViewsBad;
       return;
+    }
+    // Plan WP10.7: what applying a view costs this machine is its share of a beat, as a lockstep client's sim beat is;
+    // the speed step it allows goes to the server whenever it changes (lockstep's `CLIMSG_IntParam`).
+    mSpeedMeter.Add(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - applyStart).count());
+    if (const std::optional<int> limit = mSpeedMeter.Settled(); limit) {
+      const bool sent = SendServerGameMessage(EncodeSpeedLimit(*limit));
+      gpg::Logf("server driver: this game keeps up with speed %+d%s", *limit, sent ? "" : " (not sent: no server link)");
+    }
+    // #178: the frame's header carries the server's sim rate and clock; the session paces by them.
+    if (const wire::SViewFrame* const shown = mViews->Shown(); shown != nullptr) {
+      const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+      mClock.OnFrame(view.beat, shown->simRate, shown->serverMs, now);
+      mClientManager.SetServerSimRate(shown->simRate);
     }
     if (packet->mSimResources.px == nullptr) {
       packet->mSimResources.reset_from_owner(mResources);
@@ -306,12 +433,14 @@ namespace faf::remote::client
     frame.insert(frame.end(), bytes, bytes + message.mBuff.Size());
     if (SendServerGameMessage(frame)) {
       ++mCommandsSent;
+      mSentAtShown.push_back(mLastBeat < 0 ? 0 : mLastBeat); // answered in this order (CommandAnswer)
     }
   }
 
   moho::CmdId CNetworkSimDriver::IssueBeat() const noexcept
   {
-    return static_cast<moho::CmdId>((mLastBeat < 0 ? 0 : mLastBeat) + 1);
+    // #99: the beat the server is likely to apply it in, as the last answers measured it from the beat shown.
+    return static_cast<moho::CmdId>((mLastBeat < 0 ? 0 : mLastBeat) + mIssueLead);
   }
 
   void CNetworkSimDriver::DisconnectClients() {}
@@ -355,6 +484,7 @@ namespace faf::remote::client
     if (!mPackets.empty()) {
       outSyncData = mPackets.front().release();
       mPackets.pop_front();
+      mClock.OnShown(static_cast<std::uint32_t>(outSyncData->mCurBeat));
     }
     if (mPackets.empty()) {
       (void)::ResetEvent(mAvailable);
@@ -368,13 +498,47 @@ namespace faf::remote::client
 
   double CNetworkSimDriver::GetSimSpeed()
   {
-    return 0.0;
+    // #178: `WLD_GetSimRate`'s skew, so the display follows the server's beats (CBeatClock).
+    return mClock.HasFrames() ? mClock.Skew() : 0.0;
   }
 
-  // Session requests the server has no message for yet: the view's army is the server's, the cameras and filters
-  // don't change what it sends (a later plan item).
-  void CNetworkSimDriver::SetArmyIndex(const int) {}
-  void CNetworkSimDriver::SetGeomCams(const fa::vector<moho::GeomCamera3>&) {}
+  void CNetworkSimDriver::SetArmyIndex(const int army)
+  {
+    // Plan WP11.1: a request; the server answers with the army it grants (`FocusArmy`), which the views then carry.
+    const int shown = mFocusGranted.load(std::memory_order_relaxed);
+    if (army == shown || (shown == kNoFocusGranted && mViews && army == mViews->Info().army)) {
+      return;
+    }
+    const bool sent = SendServerGameMessage(EncodeFocusArmy(army));
+    gpg::Logf("server driver: focus on army %d asked of the server%s", army, sent ? "" : " (not sent: no server link)");
+  }
+
+  void CNetworkSimDriver::SetGeomCams(const fa::vector<moho::GeomCamera3>& cameras)
+  {
+    // Plan WP11.1: what the cameras see goes to the server at most every kCameraPeriodMs (for WP8.2's camera order).
+    const auto now = std::chrono::steady_clock::now();
+    if (now - mCamerasSentAt < std::chrono::milliseconds(kCameraPeriodMs)) {
+      return;
+    }
+    std::vector<SCameraReport> reports;
+    for (const moho::GeomCamera3& camera : cameras) {
+      if (reports.size() == kMaxCameras) {
+        break;
+      }
+      static_assert(sizeof(camera.viewProjection) == sizeof(float) * 16, "a 4x4 float matrix");
+      SCameraReport report;
+      std::memcpy(report.viewProjection.data(), &camera.viewProjection, sizeof(float) * 16);
+      report.lodScale = camera.lodScale;
+      reports.push_back(report);
+    }
+    if (SendServerGameMessage(EncodeCameras(reports))) {
+      mCamerasSentAt = now;
+      ++mCamerasSent;
+    }
+  }
+
+  // The sync filters choose what a local sim passes to the UI; a server game's views are the server's (plan WP4), so
+  // nothing here changes what it sends.
   void CNetworkSimDriver::SetSyncFilterMaskA(const moho::SSyncFilterMaskBlock&) {}
   void CNetworkSimDriver::SetSyncFilterMaskB(const moho::SSyncFilterMaskBlock&) {}
   void CNetworkSimDriver::SetSyncFilterOptionFlag(const bool) {}
