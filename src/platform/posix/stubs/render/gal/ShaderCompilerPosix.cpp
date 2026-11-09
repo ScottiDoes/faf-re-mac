@@ -157,6 +157,11 @@ namespace gpg::gal::effects
     return result;
   }
 
+  std::uint64_t ShaderCompiler::ReflectTextureSlots(const std::vector<std::uint8_t>&) const
+  {
+    return ~std::uint64_t{0}; // for DXIL only (EffectRuntime.cpp), which this build doesn't make
+  }
+
   std::vector<ShaderInput> ShaderCompiler::ReflectInputs(const std::vector<std::uint8_t>& code) const
   {
     // The Windows front end reads a DXIL input signature through ID3D12ShaderReflection;

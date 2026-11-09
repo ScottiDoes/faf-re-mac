@@ -82,10 +82,28 @@ namespace moho::sfd
       sink.reset();
       ReportError(("FAF SFD: " + filename + ": " + error.what()).c_str());
     }
-    void Decode()
+    // Only this thread uses the decoder between Open and Close, so a frame's decode leaves the
+    // mutex free for the render thread's CurrentFrame.
+    void Decode(
+      std::unique_lock<std::mutex>& lock
+    )
     {
+      struct Relock
+      {
+        std::unique_lock<std::mutex>& lock;
+        ~Relock()
+        {
+          lock.lock();
+        }
+      };
       DecodeBatch batch;
-      if (!decoder->Read(batch))
+      bool more;
+      {
+        lock.unlock();
+        Relock relock{lock};
+        more = decoder->Read(batch);
+      }
+      if (!more)
         eof = true;
       for (auto& frame : batch.video) {
         if (frame->width != metadata.header.width || frame->height != metadata.header.height)
@@ -154,37 +172,36 @@ namespace moho::sfd
         audioFinished = true;
       }
     }
-    void Tick()
+    void TakeDueFrames(
+      const double now
+    )
+    {
+      while (!video.empty() && (video.front()->pts <= now + 0.005 || !current)) {
+        current = std::move(video.front());
+        video.pop_front();
+      }
+    }
+    void Tick(
+      std::unique_lock<std::mutex>& lock
+    )
     {
       SupplyAudio();
       double now = Time();
       // Keep about half a second ready. A worker pumps independently of rendering,
       // including while the engine is loading or not requesting textures.
-      for (unsigned budget = 0; !eof && budget < 256; ++budget) {
+      for (unsigned budget = 0; !eof && !quitting && budget < 256; ++budget) {
         const bool needVideo = video.empty() || video.back()->pts < now + 0.5;
         const bool needAudio = sink && sink->Submitted() < now + 0.5;
         if (!needVideo && !needAudio)
           break;
-        Decode();
-#if defined(FAF_POSIX)
-        // After a stall of this worker (a busy or suspended process), everything that came
-        // due meanwhile is decoded in this loop before the loop below shows the latest due
-        // frame. Take due frames as they arrive instead, as that loop would, so the queue
-        // holds only the half second ahead: otherwise a 1824x1024 movie (7.5 MB a frame,
-        // main_menu.sfd) passes Decode's 128 MB interleave limit after a stall of about
-        // 0.1 s and fails for good ("Excessive SFD stream interleave").
-        while (!video.empty() && video.front()->pts <= now + 0.005) {
-          current = std::move(video.front());
-          video.pop_front();
-        }
-#endif
+        Decode(lock);
+        // Late frames go as they come: after a stall of this thread the catch-up would otherwise
+        // queue them all and pass Decode's limit, about 25 frames of a 1280x1024 movie.
+        TakeDueFrames(now);
         SupplyAudio();
       }
       now = Time();
-      while (!video.empty() && (video.front()->pts <= now + 0.005 || !current)) {
-        current = std::move(video.front());
-        video.pop_front();
-      }
+      TakeDueFrames(now);
       if (eof && video.empty() && (!sink || (audio.empty() && sink->Empty())) && now >= endTime)
         status = 3;
     }
@@ -194,7 +211,7 @@ namespace moho::sfd
       while (!quitting && status == 2) {
         if (!paused) {
           try {
-            Tick();
+            Tick(lock);
           } catch (const std::exception& error) {
             Fail(error);
           }
@@ -250,7 +267,7 @@ namespace moho::sfd
       attenuation = volume;
     }
     auto& s = *impl;
-    std::lock_guard lock(s.mutex);
+    std::unique_lock lock(s.mutex);
     s.filename = filename ? filename : "";
     s.quitting = false;
     s.eof = false;
@@ -303,7 +320,7 @@ namespace moho::sfd
       }
       // Prime while paused so OpenMovie can upload the first frame immediately.
       for (unsigned packets = 0; s.video.empty() && !s.eof && packets < 8192; ++packets) {
-        s.Decode();
+        s.Decode(lock);
         s.SupplyAudio();
       }
       if (s.video.empty())

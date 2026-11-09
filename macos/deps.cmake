@@ -34,6 +34,23 @@ target_include_directories(faf_zlib PUBLIC "${_zlib_src}")
 target_compile_options(faf_zlib PRIVATE -w)
 target_link_libraries(faf_zlib PRIVATE faf_codegen)
 
+# --- Zstandard and Monocypher ------------------------------------------------------------
+# As in cmake/deps/zstd and cmake/deps/monocypher; build_app.sh unpacks the pinned archives.
+set(_zstd_src "${FAF_DEPENDENCIES_DIR}/zstd/lib")
+file(GLOB _zstd_sources CONFIGURE_DEPENDS
+  "${_zstd_src}/common/*.c" "${_zstd_src}/compress/*.c" "${_zstd_src}/decompress/*.c")
+add_library(faf_zstd STATIC ${_zstd_sources})
+target_include_directories(faf_zstd SYSTEM PUBLIC "${_zstd_src}")
+target_compile_definitions(faf_zstd PRIVATE ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0)
+target_compile_options(faf_zstd PRIVATE -w)
+target_link_libraries(faf_zstd PRIVATE faf_codegen)
+
+set(_monocypher_src "${FAF_DEPENDENCIES_DIR}/monocypher/src")
+add_library(faf_monocypher STATIC "${_monocypher_src}/monocypher.c")
+target_include_directories(faf_monocypher SYSTEM PUBLIC "${_monocypher_src}")
+target_compile_options(faf_monocypher PRIVATE -w)
+target_link_libraries(faf_monocypher PRIVATE faf_codegen)
+
 # --- Berkeley SoftFloat 3e (test oracle only) ------------------------------------------
 # Reference for the x87 emulation's exact core (macos/docs/DETERMINISM.md §3.5, §6.1):
 # extF80 with extF80_roundingPrecision 32/64/80 and the "8086" specialization, which

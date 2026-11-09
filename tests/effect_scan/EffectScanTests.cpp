@@ -2,6 +2,7 @@
 // find, on generated text made of the tokens those patterns care about.
 
 #include <cstdio>
+#include <gtest/gtest.h>
 #include <cstdint>
 #include <random>
 #include <regex>
@@ -51,20 +52,10 @@ namespace
     return rows;
   }
 
-  int gFailures = 0;
-
+  // `expected` holds the regex's rows, `actual` the scanner's.
   void Report(const char* const what, const std::string& text, const Rows& expected, const Rows& actual)
   {
-    if (expected == actual || ++gFailures > 10) {
-      return;
-    }
-    std::printf("%s differs on: <<%s>>\n  regex %zu rows, scan %zu rows\n", what, text.c_str(), expected.size(), actual.size());
-    for (const std::string& row : expected) {
-      std::printf("  regex %s\n", row.c_str());
-    }
-    for (const std::string& row : actual) {
-      std::printf("  scan  %s\n", row.c_str());
-    }
+    EXPECT_EQ(expected, actual) << what << " differs on: <<" << text << ">>";
   }
 
   std::string NameOnly(const std::string& row)
@@ -174,13 +165,13 @@ namespace
   }
 } // namespace
 
-int main()
+TEST(Existing_EffectScan, MatchesRegexTokens)
 {
   std::mt19937 random(0x5EED2007U);
   constexpr int kCases = 60000;
   for (int index = 0; index < kCases; ++index) {
     CheckAll(Generate(random));
+    // One differing text names the bug; the rest of the run would repeat it.
+    ASSERT_FALSE(HasFailure()) << "generated text " << index << " of " << kCases;
   }
-  std::printf("effect scan: %d generated texts, %d differences\n", kCases, gFailures);
-  return gFailures == 0 ? 0 : 1;
 }

@@ -14,6 +14,10 @@ list(APPEND FAF_MACOS_REPLACED_SOURCES "^gpg/gal/effects/ShaderCompiler\\.cpp$=>
 # decode cache; macos/porting/textures.md).
 list(APPEND FAF_MACOS_REPLACED_SOURCES "^gpg/gal/backends/common/ImageCodec\\.cpp$=>platform/posix/stubs/render/gal/ImageCodecPosix.cpp")
 
+# DirectXTex decoder and encoder for ImageCodec.cpp without d3dx11_43.dll (issue #318).
+# Its only caller is ImageCodec.cpp, replaced above; nothing replaces it.
+list(APPEND FAF_MACOS_EXCLUDED_SOURCES "^gpg/gal/backends/common/ImageCodecDirectXTex\\.cpp$")
+
 # Win32 colour cursor (GDI DIB + CreateIconIndirect + user32 SetCursor/ShowCursor).
 # Replaced by platform/posix/stubs/render/gal/WindowsCursorPosix.cpp: real colour cursors
 # through the shell (SDL3; macos/porting/shell.md).
@@ -32,3 +36,8 @@ list(APPEND FAF_MACOS_EXCLUDED_SOURCES "^gpg/gal/DxgiAdapterInfo\\.cpp$")
 # platform/posix/stubs/render/moho/CD3DFontPosix.cpp, which compiles the engine's own
 # CD3DFont.cpp unchanged on the Gdi area's Core Text fonts (macos/porting/fonts.md).
 list(APPEND FAF_MACOS_REPLACED_SOURCES "^moho/render/d3d/CD3DFont\\.cpp$=>platform/posix/stubs/render/moho/CD3DFontPosix.cpp")
+
+# MSDF font cook: FreeType and msdfgen, not in the macOS build yet.
+# Replaced by platform/posix/stubs/render/moho/MsdfFontCookPosix.cpp: every cook fails, and
+# MsdfFontRegistry.cpp cooks nothing, so text stays on the glyph bitmaps.
+list(APPEND FAF_MACOS_REPLACED_SOURCES "^moho/render/font/MsdfFontCook\\.cpp$=>platform/posix/stubs/render/moho/MsdfFontCookPosix.cpp")

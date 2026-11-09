@@ -225,15 +225,21 @@ namespace gpg::gal
   }
 
   DepthStencilTargetVulkan::DepthStencilTargetVulkan(
-    const DepthStencilTargetContext& context, vulkan::TrackedImage image, const VkImageView view
+    const DepthStencilTargetContext& context, vulkan::TrackedImage image, const VkImageView view, const VkImageView sampledView
   )
     : mContext(context)
     , mImage(image)
     , mView(view)
+    , mSampledView(sampledView)
   {}
 
   DepthStencilTargetVulkan::~DepthStencilTargetVulkan()
   {
+    if (mSampledView != VK_NULL_HANDLE) {
+      vulkan::TrackedImage none{};
+      RetireImage(none, mSampledView);
+      mSampledView = VK_NULL_HANDLE;
+    }
     RetireImage(mImage, mView);
     mView = VK_NULL_HANDLE;
   }
@@ -336,7 +342,11 @@ namespace gpg::gal
     // The whole buffer, DISCARD too: bytes outside the locked range keep their
     // last values, as a D3D9 driver's renamed buffer does (see BufferStorageD3D12).
     const vulkan::UploadAllocation chunk = device.AllocateUpload(mByteWidth, 256U);
-    std::memcpy(chunk.cpu, mShadow.data(), mByteWidth);
+    if (mLockedRangeOnly && gLockedRangeOnly) {
+      std::memcpy(chunk.cpu + mLockOffset, mShadow.data() + mLockOffset, mLockSize);
+    } else {
+      std::memcpy(chunk.cpu, mShadow.data(), mByteWidth);
+    }
     mChunkBuffer = chunk.buffer;
     mChunkOffset = chunk.offset;
     mChunkCpu = chunk.cpu;

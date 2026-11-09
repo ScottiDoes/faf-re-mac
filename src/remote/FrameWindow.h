@@ -13,7 +13,8 @@
 // freshness, never consistency. The server keeps the frames it sent from that acknowledged one
 // on, at most `kMaxFrames` of them; when the acknowledged frame falls out (or none was
 // acknowledged yet) the next frame goes in full. The client keeps the frames it decoded, as many,
-// and decodes each new one against the frame its header names.
+// and decodes each new one against the frame its header names; a whole frame drops the older ones
+// only when its id restarts, as acknowledgements arrive late and can name a frame before it.
 
 namespace faf::remote
 {
@@ -53,6 +54,8 @@ namespace faf::remote
 
     /** The newest frame decoded (what the client acknowledges), or `kNoBaseline`. */
     [[nodiscard]] std::uint32_t Newest() const noexcept { return mFrames.empty() ? wire::kNoBaseline : mFrames.back().frameId; }
+    /** The newest frame kept, which the next frame is decoded against; null before one. For damage on purpose (WPR.31). */
+    [[nodiscard]] wire::SViewFrame* NewestFrame() noexcept { return mFrames.empty() ? nullptr : &mFrames.back(); }
 
   private:
     std::deque<wire::SViewFrame> mFrames; // decoded, oldest first

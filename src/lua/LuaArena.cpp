@@ -10,7 +10,9 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <Windows.h>
 #else
 #include <sys/mman.h>
@@ -111,7 +113,13 @@ namespace
   std::size_t gCommittedBytes = 0;
   std::uint8_t gSpanClass[kSpanCount];
   std::uint32_t gLargeSpans[kSpanCount]; // on a large block's first span: its span count
-  std::vector<LargeRun>* gFreeRuns = nullptr; // made on first use: the range is reserved before the CRT starts
+  // Each free run owns at least one arena span; freeing needs no host-heap allocation.
+  LargeRun gFreeRuns[kSpanCount]{};
+  std::size_t gFreeRunCount = 0;
+  // A read-only summary of the free list; rebuilt only after its contents change.
+  std::uint32_t gAdjacentSpans[kSpanCount]{};
+  std::size_t gLargestAdjacentRun = 0;
+  bool gFreeRunsChanged = true;
   GlobalClassLists gGlobal[kClassCount];
   constinit thread_local ThreadLists tLists{};
 
@@ -200,12 +208,36 @@ namespace
     return first;
   }
 
+  // Preserve the old first-fit / swap-pop choice until it cannot satisfy a request.
+  [[nodiscard]] std::size_t TakeFreeRun(const std::size_t spans) noexcept
+  {
+    for (std::size_t index = 0; index < gFreeRunCount; ++index) {
+      LargeRun& run = gFreeRuns[index];
+      if (run.spans >= spans) {
+        gFreeRunsChanged = true;
+        const std::size_t first = run.firstSpan;
+        run.firstSpan += spans;
+        run.spans -= spans;
+        if (run.spans == 0u) {
+          run = gFreeRuns[--gFreeRunCount];
+        }
+        return first;
+      }
+    }
+    return kSpanCount;
+  }
+
   [[nodiscard]] FreeBlock* CarveSpan(const std::uint32_t sizeClass, std::uint32_t& outCount) noexcept
   {
     std::size_t span = kSpanCount;
     {
       std::lock_guard<std::mutex> guard(gSpanLock);
       span = TakeSpans(1u);
+      if (span == kSpanCount) {
+        // Only once the range has no fresh span left, so a game that never fills it keeps its addresses:
+        // the first freed large run gives up its first span.
+        span = TakeFreeRun(1u);
+      }
       if (span == kSpanCount) {
         return nullptr;
       }
@@ -235,10 +267,21 @@ namespace
         global.batches = taken->nextBatch;
         outCount = BatchBlocks(sizeClass);
       } else if (global.loose != nullptr) {
+        // One batch at most, as from `batches`. Taking the whole list (every block an exited thread gave
+        // back) hid it from the other threads, which carved fresh spans instead; when the taker exited it
+        // gave everything back, fresh spans' worth included, so each Play in the editor grew it again.
+        const std::uint32_t want = BatchBlocks(sizeClass);
         taken = global.loose;
-        outCount = global.looseCount;
-        global.loose = nullptr;
-        global.looseCount = 0;
+        FreeBlock* last = taken;
+        std::uint32_t count = 1;
+        while (count < want && last->next != nullptr) {
+          last = last->next;
+          ++count;
+        }
+        global.loose = last->next;
+        global.looseCount = (global.loose != nullptr) ? global.looseCount - count : 0u;
+        last->next = nullptr;
+        outCount = count;
       }
     }
     return (taken != nullptr) ? taken : CarveSpan(sizeClass, outCount);
@@ -293,31 +336,84 @@ namespace
   };
   thread_local ThreadExitGuard tExitGuard;
 
+  // Do not reorder the list for an unsatisfiable request: Lua hashes pointer keys.
+  // The summary costs O(arena spans + free runs), once per changed free-list state.
+  void SummarizeAdjacentRuns() noexcept
+  {
+    if (!gFreeRunsChanged) {
+      return;
+    }
+    std::memset(gAdjacentSpans, 0, sizeof(gAdjacentSpans));
+    for (std::size_t index = 0; index < gFreeRunCount; ++index) {
+      const LargeRun& run = gFreeRuns[index];
+      gAdjacentSpans[run.firstSpan] = static_cast<std::uint32_t>(run.spans);
+    }
+    gLargestAdjacentRun = 0;
+    for (std::size_t first = 0; first < gNextSpan;) {
+      std::size_t spans = gAdjacentSpans[first];
+      if (spans == 0u) {
+        ++first;
+        continue;
+      }
+      while (first + spans < gNextSpan && gAdjacentSpans[first + spans] != 0u) {
+        const std::size_t next = gAdjacentSpans[first + spans];
+        gAdjacentSpans[first + spans] = 0;
+        spans += next;
+      }
+      gAdjacentSpans[first] = static_cast<std::uint32_t>(spans);
+      if (spans > gLargestAdjacentRun) {
+        gLargestAdjacentRun = spans;
+      }
+      first += spans;
+    }
+    gFreeRunsChanged = false;
+  }
+
+  [[nodiscard]] std::size_t TakeAdjacentRun(const std::size_t spans) noexcept
+  {
+    SummarizeAdjacentRuns();
+    if (spans > gLargestAdjacentRun) {
+      return kSpanCount;
+    }
+    std::size_t first = 0;
+    while (gAdjacentSpans[first] < spans) {
+      ++first;
+    }
+    const std::size_t end = first + spans;
+    for (std::size_t index = 0; index < gFreeRunCount;) {
+      LargeRun& run = gFreeRuns[index];
+      if (run.firstSpan >= first && run.firstSpan < end) {
+        const std::size_t runEnd = run.firstSpan + run.spans;
+        if (runEnd <= end) {
+          run = gFreeRuns[--gFreeRunCount];
+          continue;
+        }
+        run.firstSpan = end;
+        run.spans = runEnd - end;
+      }
+      ++index;
+    }
+    gFreeRunsChanged = true;
+    return first;
+  }
+
   [[nodiscard]] void* AllocateLarge(const std::size_t bytes) noexcept
   {
+    // Also prevents rounding overflow on an impossible request.
+    if (bytes > gReserveBytes) {
+      return nullptr;
+    }
     const std::size_t spans = (bytes + kSpanBytes - 1u) / kSpanBytes;
     std::lock_guard<std::mutex> guard(gSpanLock);
-    std::size_t first = kSpanCount;
-    if (gFreeRuns == nullptr) {
-      gFreeRuns = new std::vector<LargeRun>();
-    }
-    std::vector<LargeRun>& runs = *gFreeRuns;
-    for (std::size_t index = 0; index < runs.size(); ++index) {
-      if (runs[index].spans >= spans) {
-        first = runs[index].firstSpan;
-        runs[index].firstSpan += spans;
-        runs[index].spans -= spans;
-        if (runs[index].spans == 0u) {
-          runs[index] = runs.back();
-          runs.pop_back();
-        }
-        break;
-      }
-    }
+    // A cached upper bound also rules out every individual run without rescanning it.
+    std::size_t first = (!gFreeRunsChanged && spans > gLargestAdjacentRun) ? kSpanCount : TakeFreeRun(spans);
     if (first == kSpanCount) {
       first = TakeSpans(spans);
       if (first == kSpanCount) {
-        return nullptr;
+        first = TakeAdjacentRun(spans);
+        if (first == kSpanCount) {
+          return nullptr;
+        }
       }
     }
     gSpanClass[first] = kLargeStart;
@@ -331,7 +427,35 @@ namespace
   void FreeLarge(const std::size_t first) noexcept
   {
     std::lock_guard<std::mutex> guard(gSpanLock);
-    gFreeRuns->push_back(LargeRun{first, gLargeSpans[first]});
+    const std::size_t spans = gLargeSpans[first];
+    const std::size_t end = first + spans;
+    gFreeRunsChanged = true;
+    // Merged with the free runs it touches, so freed space comes back whole: a run left in pieces
+    // fits no request bigger than its largest piece, and every such request took fresh spans (a Play in
+    // the editor left about 4 MB a time). No two free runs touch, so there is at most one each side.
+    std::size_t before = kSpanCount;
+    std::size_t after = kSpanCount;
+    for (std::size_t index = 0; index < gFreeRunCount; ++index) {
+      const LargeRun& run = gFreeRuns[index];
+      if (run.firstSpan + run.spans == first) {
+        before = index;
+      } else if (run.firstSpan == end) {
+        after = index;
+      }
+    }
+    if (before != kSpanCount && after != kSpanCount) {
+      gFreeRuns[before].spans += spans + gFreeRuns[after].spans;
+      gFreeRuns[after] = gFreeRuns[--gFreeRunCount];
+    } else if (before != kSpanCount) {
+      gFreeRuns[before].spans += spans;
+    } else if (after != kSpanCount) {
+      gFreeRuns[after].firstSpan = first;
+      gFreeRuns[after].spans += spans;
+    } else {
+      // A valid live allocation contributes at least one span not in the free list,
+      // hence the list has room before its release. Invalid/double frees remain invalid.
+      gFreeRuns[gFreeRunCount++] = LargeRun{first, spans};
+    }
   }
 
   [[nodiscard]] std::size_t BlockBytes(const void* const block) noexcept
@@ -453,6 +577,44 @@ namespace lua
       lights.cells.push_back(cell);
     }
     return cell;
+  }
+
+  ArenaUsage ArenaReadUsage() noexcept
+  {
+    ArenaUsage usage;
+    {
+      std::lock_guard<std::mutex> guard(gSpanLock);
+      usage.committedBytes = gCommittedBytes;
+      usage.spanBytes = gNextSpan * kSpanBytes;
+      static_assert(ArenaUsage::kClasses == kClassCount);
+      for (std::size_t span = 0; span < gNextSpan; ++span) {
+        if (gSpanClass[span] < kClassCount) {
+          usage.smallSpanBytes += kSpanBytes;
+          ++usage.classSpans[gSpanClass[span]];
+        }
+      }
+      for (std::size_t index = 0; index < gFreeRunCount; ++index) {
+        usage.freeRunBytes += gFreeRuns[index].spans * kSpanBytes;
+      }
+      usage.freeRuns = gFreeRunCount;
+    }
+    for (std::uint32_t sizeClass = 0; sizeClass < kClassCount; ++sizeClass) {
+      GlobalClassLists& global = gGlobal[sizeClass];
+      std::lock_guard<std::mutex> guard(global.lock);
+      std::size_t blocks = global.looseCount;
+      for (const FreeBlock* batch = global.batches; batch != nullptr; batch = batch->nextBatch) {
+        blocks += BatchBlocks(sizeClass);
+      }
+      usage.smallFreeBytes += blocks * ClassBytes(sizeClass);
+      usage.classBytes[sizeClass] = ClassBytes(sizeClass);
+      usage.classFreeBlocks[sizeClass] = static_cast<std::uint32_t>(blocks);
+    }
+    {
+      LightCells& lights = Lights();
+      std::lock_guard<std::mutex> guard(lights.lock);
+      usage.lightCells = lights.cells.size();
+    }
+    return usage;
   }
 } // namespace lua
 

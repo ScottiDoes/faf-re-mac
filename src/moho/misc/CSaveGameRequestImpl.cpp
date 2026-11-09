@@ -1,4 +1,5 @@
 #include "moho/misc/CSaveGameRequestImpl.h"
+#include "moho/misc/FileWriteExact.h"
 #include "moho/sim/CVFSImpl.h"
 
 #include <Windows.h>
@@ -40,7 +41,7 @@ namespace
 
   constexpr std::size_t kUtf16HeaderTextCopyLimit = 2047;
 
-  [[nodiscard]] msvc8::string MakeTempSavePath(const msvc8::string& basePath)
+  [[nodiscard]] fa::string MakeTempSavePath(const fa::string& basePath)
   {
     return basePath + ".NEW";
   }
@@ -77,20 +78,9 @@ namespace
     }
   }
 
-  [[nodiscard]] std::wstring Utf8ToWide(const msvc8::string& source)
+  [[nodiscard]] std::wstring Utf8ToWide(const fa::string& source)
   {
     return gpg::STR_Utf8ToWide(source.c_str());
-  }
-
-  [[nodiscard]] bool WriteExact(std::FILE* const file, const void* const data, const std::size_t byteCount)
-  {
-    if (!file) {
-      return false;
-    }
-    if (byteCount == 0) {
-      return true;
-    }
-    return std::fwrite(data, byteCount, 1, file) == 1;
   }
 
   [[nodiscard]] bool RewriteSaveHeader(std::FILE* const file, const SaveGameFileHeader& header)
@@ -114,7 +104,7 @@ namespace
   }
 
   void FillFileHeaderTextFields(
-    SaveGameFileHeader& outHeader, const msvc8::string& appNameUtf8, const msvc8::string& sessionNameUtf8
+    SaveGameFileHeader& outHeader, const fa::string& appNameUtf8, const fa::string& sessionNameUtf8
   )
   {
     CopyWideStringTruncated(outHeader.mAppNameUtf16, Utf8ToWide(appNameUtf8));
@@ -130,7 +120,7 @@ namespace
   }
 
 
-  [[nodiscard]] bool MoveTempFileIntoSavePath(const msvc8::string& tempPath, const msvc8::string& targetPath)
+  [[nodiscard]] bool MoveTempFileIntoSavePath(const fa::string& tempPath, const fa::string& targetPath)
   {
     const std::wstring wideTargetPath = gpg::STR_Utf8ToWide(targetPath.c_str());
     const std::wstring wideTempPath = gpg::STR_Utf8ToWide(tempPath.c_str());
@@ -139,7 +129,7 @@ namespace
     return moved;
   }
 
-  [[nodiscard]] bool DeleteTempFile(const msvc8::string& tempPath)
+  [[nodiscard]] bool DeleteTempFile(const fa::string& tempPath)
   {
     const std::wstring wideTempPath = gpg::STR_Utf8ToWide(tempPath.c_str());
     const bool deleted = ::DeleteFileW(wideTempPath.c_str()) != FALSE;
@@ -231,7 +221,7 @@ namespace moho
    */
   SaveLoadError::~SaveLoadError() noexcept = default;
 
-  const msvc8::string& SaveLoadError::GetRawMessage() const noexcept
+  const fa::string& SaveLoadError::GetRawMessage() const noexcept
   {
     return mRawMessage;
   }
@@ -281,8 +271,8 @@ namespace moho
     mArchive = nullptr;
 
     bool completedSuccessfully = data.useSuggestedName;
-    msvc8::string completionText = data.saveName;
-    const msvc8::string tempPath = MakeTempSavePath(mSavePath);
+    fa::string completionText = data.saveName;
+    const fa::string tempPath = MakeTempSavePath(mSavePath);
 
     if (completedSuccessfully) {
       SaveGameFileHeader fileHeader{};

@@ -141,6 +141,16 @@ if [[ ! -f $boost/boost/version.hpp ]]; then
     rm -f "$stamps/patches-boost"
 fi
 patch_tree boost "$boost" boost_1_34_1_faf_required.patch boost_1_34_1_faf_macos.patch
+# unpack_source <folder under dependencies/> <archive>: the archive's one top folder becomes it.
+unpack_source() {
+    local dest=$root/dependencies/$1
+    rm -rf "$dest.part"; mkdir -p "$dest.part"
+    tar -xzf "$2" --strip-components=1 -C "$dest.part"
+    mv "$dest.part" "$dest"
+}
+[[ -f dependencies/zstd/lib/zstd.h ]] || unpack_source zstd "$(fetch "$ZSTD_URL" "$ZSTD_SHA256")"
+[[ -f dependencies/monocypher/src/monocypher.c ]] ||
+    unpack_source monocypher "$(fetch "$MONOCYPHER_URL" "$MONOCYPHER_SHA256" "$MONOCYPHER_FILE")"
 
 # ---------------------------------------------------------------------------------------------
 step "SDL3 and FAudio"

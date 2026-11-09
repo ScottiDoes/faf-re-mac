@@ -7,9 +7,16 @@
 #include "gpg/gal/PipelineDiskCache.h"
 #include "gpg/gal/PlacedResources.h"
 #include "gpg/gal/backends/common/ImageCodec.h"
+#include "gpg/gal/backends/common/PipelineMemo.h"
 #include "gpg/gal/backends/d3d11/EffectSourceD3D11.h"
 #include "gpg/gal/effects/EffectRuntime.h"
+#include "gpg/gal/effects/TextureFiltering.h"
 #include "moho/console/CConCommand.h"
+#include "moho/render/ProjectileIconRenderer.h"
+#include "moho/render/RangeGpuRenderer.h"
+#include "moho/render/SelectionBracketGpuRenderer.h"
+#include "moho/render/StrategicIconRenderer.h"
+#include "moho/render/WorldShapeGpuRenderer.h"
 
 namespace moho
 {
@@ -44,12 +51,70 @@ namespace moho
       &gpg::gal::gSharedBuffers
     );
 
+    /** Engine addition: `ren_PipelineMemo` (see gpg/gal/backends/common/PipelineMemo.h). */
+    TConVar<bool> gTConVar_ren_PipelineMemo(
+      "ren_PipelineMemo",
+      "Direct3D 12 / Vulkan: a draw finds its pipeline in a small table of recent ones (1, the default), or always builds "
+      "the full key (0). Read at each draw.",
+      &gpg::gal::gPipelineMemo
+    );
+
+    /** Engine addition: `ren_UsedTextureTable` (see gpg/gal/backends/common/PipelineMemo.h). */
+    TConVar<bool> gTConVar_ren_UsedTextureTable(
+      "ren_UsedTextureTable",
+      "Direct3D 12 / Vulkan: an effect pass keeps its texture table when only bindings its shaders don't read changed (1, "
+      "the default), or rebuilds it on any change (0). Read at each pass.",
+      &gpg::gal::gUsedTextureTable
+    );
+
+    /** Engine addition: `ren_VulkanDynamicConstants` (see gpg/gal/backends/common/PipelineMemo.h). */
+    TConVar<bool> gTConVar_ren_VulkanDynamicConstants(
+      "ren_VulkanDynamicConstants",
+      "Vulkan: a draw whose shader constants changed binds one set per upload buffer with its constants' offset (1, the "
+      "default), or allocates and writes a new set (0). Read between frames.",
+      &gpg::gal::gVulkanDynamicConstants
+    );
+
+    /** Engine addition: `ren_LockedRangeOnly` (see gpg/gal/PlacedResources.h). */
+    TConVar<bool> gTConVar_ren_LockedRangeOnly(
+      "ren_LockedRangeOnly",
+      "Direct3D 12 / Vulkan: a dynamic buffer whose owner reads only what it just wrote copies only those bytes when "
+      "it is renamed (1, the default), or copies all of it (0). Read at each unlock.",
+      &gpg::gal::gLockedRangeOnly
+    );
+
     /** Engine addition: `ren_ReleaseBufferCopies` (see gpg/gal/PlacedResources.h). */
     TConVar<bool> gTConVar_ren_ReleaseBufferCopies(
       "ren_ReleaseBufferCopies",
       "Direct3D 12 / Vulkan: free the CPU copy of a static buffer its owner won't lock again, such as a mesh's (1, the "
       "default), or keep every copy (0). Read when the owner releases it.",
       &gpg::gal::gReleaseBufferCopies
+    );
+
+    /** Engine addition: `ren_VulkanScaledPresent` (see gpg/gal/PlacedResources.h). */
+    TConVar<bool> gTConVar_ren_VulkanScaledPresent(
+      "ren_VulkanScaledPresent",
+      "Vulkan: each head draws into an image of its own that is copied into the window's image at present, so a "
+      "resized window keeps showing the game (1, the default), or draws straight into the window's images (0), "
+      "which stop presenting after a resize. Read when the device makes its head targets.",
+      &gpg::gal::gVulkanScaledPresent
+    );
+
+    /** Engine addition: `ren_VulkanPreciseBarriers` (see gpg/gal/PlacedResources.h). */
+    TConVar<bool> gTConVar_ren_VulkanPreciseBarriers(
+      "ren_VulkanPreciseBarriers",
+      "Vulkan: a target switching between being drawn into, sampled and copied waits only for the work that used it "
+      "(1, the default), or for all earlier work on the GPU (0). Read at each switch.",
+      &gpg::gal::gVulkanPreciseBarriers
+    );
+
+    /** Engine addition: `ren_TextureAnisotropy` (see gpg/gal/effects/TextureFiltering.h). */
+    TConVar<int> gTConVar_ren_TextureAnisotropy(
+      "ren_TextureAnisotropy",
+      "Direct3D 12 and Vulkan: anisotropic filtering (2-16) for the tiled textures the effects sample trilinearly - "
+      "terrain layers, unit albedo, normal and specular maps - so ground and hulls seen at a slant stay sharp; 0 keeps "
+      "the effects' own filtering. 8 by default. Applies at the next draw of each effect.",
+      &gpg::gal::effects::gTextureAnisotropy
     );
 
     /** Engine addition: `d3d_UploadIdleMB` (see gpg/gal/PlacedResources.h). */
@@ -66,6 +131,14 @@ namespace moho
       "Direct3D 12 / Vulkan: read DXT1/3/5 DDS textures straight from the file (1, the default) instead of decoding "
       "every texture through D3DX11 on a software device (0), which takes 25-45 ms per 1024x1024 texture.",
       &gpg::gal::imaging::gDdsDirectLoad
+    );
+
+    /** Engine addition: `ren_PrepareDuringLoading` (see REN_PrepareGpuPaths). */
+    TConVar<bool> gTConVar_ren_PrepareDuringLoading(
+      "ren_PrepareDuringLoading",
+      "Build the GPU-driven render paths and the map's sky dome while the loading screen waits for the sim (1, the "
+      "default) instead of in the first frame of play that draws them (0), where they took some 120 ms.",
+      &moho::ren_PrepareDuringLoading
     );
 
     /** Engine addition: `ren_EffectFastScan` (see gpg/gal/backends/d3d11/EffectSourceD3D11.h). */
@@ -104,6 +177,8 @@ namespace moho
   extern int ren_GpuProjectileIcons;
   extern int ren_GpuShapes;
   extern int ren_GpuRanges;
+  extern int ren_GpuText;
+  extern int ren_GpuFontCook;
 
   namespace
   {
@@ -126,6 +201,9 @@ namespace moho
        gpg::gal::kGpuFeatureVertexPulling},
       {"ren_GpuShapes", &ren_GpuShapes, gpg::gal::kGpuPathWorldShapes, gpg::gal::kGpuFeatureVertexPulling},
       {"ren_GpuRanges", &ren_GpuRanges, gpg::gal::kGpuPathRanges, gpg::gal::kGpuFeatureVertexPulling},
+      {"ren_GpuText", &ren_GpuText, gpg::gal::kGpuPathMsdfText, gpg::gal::kGpuFeatureVertexPulling},
+      {"ren_GpuFontCook", &ren_GpuFontCook, gpg::gal::kGpuPathMsdfCook,
+       gpg::gal::kGpuFeatureVertexPulling | gpg::gal::kGpuFeatureCompute},
     };
   } // namespace
 
@@ -155,3 +233,19 @@ namespace moho
     return text;
   }
 } // namespace moho
+
+bool moho::ren_PrepareDuringLoading = true;
+
+int moho::REN_PrepareGpuPaths()
+{
+  // `IsActive` builds a path's program on its first call, as the first frame that draws it would.
+  int active = 0;
+  active += StrategicIconRenderer::Get().IsActive() ? 1 : 0;
+  active += StrategicIconRenderer::Get().IsClassifyActive() ? 1 : 0;
+  active += ProjectileIconRenderer::Get().IsActive() ? 1 : 0;
+  active += SelectionBracketGpuRenderer::Get().IsActive() ? 1 : 0;
+  active += WorldShapeGpuRenderer::Get().IsActive() ? 1 : 0;
+  active += RangeGpuRenderer::Get().IsActive() ? 1 : 0;
+  active += REN_PrepareGpuVisionCaster() ? 1 : 0;
+  return active;
+}

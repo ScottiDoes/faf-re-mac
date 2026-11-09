@@ -59,8 +59,8 @@ namespace moho
      */
     ~SVFSMountPoint();
 
-    msvc8::string mDir;        // +0x00
-    msvc8::string mMountpoint; // +0x1C
+    fa::string mDir;        // +0x00
+    fa::string mMountpoint; // +0x1C
     SFileWaitHandle* mZipHandle; // +0x38
   };
 
@@ -84,7 +84,7 @@ namespace moho
      * What it does:
      * Initializes VFS mountpoint storage and expands configured mount lanes.
      */
-    CVFSImpl(const msvc8::vector<SVFSMountPoint>& mountpoints, const std::filesystem::path& launchDir);
+    CVFSImpl(const fa::vector<SVFSMountPoint>& mountpoints, const std::filesystem::path& launchDir);
 
     /**
      * Address: 0x004662F0 (FUN_004662F0, Moho::CVFSImpl::dtr)
@@ -103,7 +103,7 @@ namespace moho
      * Resolves one mounted path to an on-disk/zip-backed path and writes the
      * first match to `outPath`.
      */
-    msvc8::string* FindFile(msvc8::string* outPath, gpg::StrArg sourcePath, SDiskFileInfo* outInfo) override;
+    fa::string* FindFile(fa::string* outPath, gpg::StrArg sourcePath, SDiskFileInfo* outInfo) override;
 
     /**
      * Address: 0x00466C60 (FUN_00466C60, Moho::CVFSImpl::ToMountedPath)
@@ -115,7 +115,7 @@ namespace moho
      * Converts one real path under mounted directories into mounted VFS path
      * form.
      */
-    msvc8::string* ToMountedPath(msvc8::string* outPath, gpg::StrArg sourcePath) override;
+    fa::string* ToMountedPath(fa::string* outPath, gpg::StrArg sourcePath) override;
 
     /**
      * Address: 0x00466E50 (FUN_00466E50, Moho::CVFSImpl::GetFileInfo)
@@ -141,7 +141,7 @@ namespace moho
       gpg::StrArg mountPrefix,
       gpg::StrArg queryPath,
       bool allowPrefixWildcard,
-      msvc8::vector<msvc8::string>* outPaths
+      fa::vector<fa::string>* outPaths
     ) override;
 
     /**
@@ -152,7 +152,7 @@ namespace moho
      * Enumerates child mounted directories beneath `mountPrefix`, then sorts
      * and de-duplicates the output list.
      */
-    void EnumerateChildren(gpg::StrArg mountPrefix, msvc8::vector<msvc8::string>* outPaths) override;
+    void EnumerateChildren(gpg::StrArg mountPrefix, fa::vector<fa::string>* outPaths) override;
 
   private:
     /**
@@ -172,10 +172,16 @@ namespace moho
      * mountpoint root, optionally enables disk-watch registration for
      * directory lanes, and mounts zip handles when needed.
      */
-    void AddSearchPath(const SVFSMountPoint& mountPoint, const msvc8::string& resolvedPath, bool isDirectory);
+    void AddSearchPath(const SVFSMountPoint& mountPoint, const fa::string& resolvedPath, bool isDirectory);
 
   public:
-    msvc8::vector<SVFSMountPoint> mMountpoints; // +0x04
+    /**
+     * Engine addition (map editor): mounts one more directory at `mountpoint`, after the others, as an init
+     * file's MountDirectory does at startup. The editor mounts the map folders it makes this way.
+     */
+    void MountDirectoryLate(const std::filesystem::path& directory, gpg::StrArg mountpoint);
+
+    fa::vector<SVFSMountPoint> mMountpoints; // +0x04
   };
 
   /**
@@ -186,7 +192,7 @@ namespace moho
    * `CVirtualFileSystem` interface.
    */
   [[nodiscard]] CVirtualFileSystem* VFS_Create(
-    const msvc8::vector<SVFSMountPoint>& mountpoints,
+    const fa::vector<SVFSMountPoint>& mountpoints,
     const std::filesystem::path& launchDir
   );
 
