@@ -172,8 +172,9 @@ namespace moho
     [[nodiscard]] const std::filesystem::path& KeyframeRoot()
     {
       static const std::filesystem::path root = [] {
-        wchar_t exePath[MAX_PATH] = {};
         std::error_code ignored;
+#if !defined(FAF_POSIX) // beside the executable would be inside the signed macOS app
+        wchar_t exePath[MAX_PATH] = {};
         if (::GetModuleFileNameW(nullptr, exePath, MAX_PATH) != 0) {
           std::filesystem::path beside = std::filesystem::path(exePath).parent_path() / "replay_keyframes";
           std::filesystem::create_directories(beside, ignored);
@@ -185,6 +186,7 @@ namespace moho
             return beside;
           }
         }
+#endif
         return std::filesystem::temp_directory_path(ignored) / "faf_replay_keyframes";
       }();
       return root;
