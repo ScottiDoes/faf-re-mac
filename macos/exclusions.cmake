@@ -19,6 +19,8 @@ set(FAF_MACOS_EXCLUDED_SOURCES
 # static initializers keep their order (CMakeLists.txt). Use plain exclusion only when
 # nothing replaces the TU, or when the stand-in has no static initializers.
 set(FAF_MACOS_REPLACED_SOURCES "")
+# boost.thread, compiled with Windows-sized thread stacks (platform/posix/stubs/BoostThreadPosix.cpp).
+list(APPEND FAF_MACOS_REPLACED_SOURCES "/libs/thread/src/thread\\.cpp$=>platform/posix/stubs/BoostThreadPosix.cpp")
 
 # Porting packages keep their own lists in exclusions.d/<package>.cmake, each appending
 # to FAF_MACOS_EXCLUDED_SOURCES or FAF_MACOS_REPLACED_SOURCES with a reason per entry.
