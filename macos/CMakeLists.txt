@@ -178,7 +178,7 @@ target_include_directories(faf_engine PUBLIC
 target_compile_definitions(faf_engine PUBLIC "FAF_VULKAN_SDK_DIR=\"${FAF_VULKAN_SDK}\"")
 # The native build's own engine Lua (macos/fafengine-macos), when the run folder has no copy.
 target_compile_definitions(faf_engine PUBLIC "FAF_MACOS_LUA_DIR=\"${CMAKE_CURRENT_LIST_DIR}/fafengine-macos\"")
-target_link_libraries(faf_engine PUBLIC faf_codegen Wm3Foundation faf_zlib faf_zstd faf_monocypher)
+target_link_libraries(faf_engine PUBLIC faf_codegen Wm3Foundation faf_zlib faf_zstd faf_monocypher faf_freetype faf_msdfgen)
 # The git commit compiled into the engine (gpg/core/diagnostics/BuildInfo.cpp) and the switch
 # names of docs/SWITCHES.md (moho/sim/DesyncRecorder.cpp), from upstream's generator, which
 # reads both relative to PROJECT_SOURCE_DIR: the repository, not this folder.
@@ -249,7 +249,7 @@ if(_faf_runner_sources)
   add_executable(faf_replay $<TARGET_OBJECTS:faf_engine> ${_faf_bridge_objects} $<TARGET_OBJECTS:faf_runner>)
   set_target_properties(faf_replay PROPERTIES LINKER_LANGUAGE CXX)
   target_link_libraries(faf_replay PRIVATE
-    Wm3Foundation faf_zlib faf_zstd faf_monocypher SDL3::SDL3 ${FAF_MEDIA_LIBRARIES} ${FAF_MACOS_FRAMEWORKS}
+    Wm3Foundation faf_zlib faf_zstd faf_monocypher faf_freetype faf_msdfgen SDL3::SDL3 ${FAF_MEDIA_LIBRARIES} ${FAF_MACOS_FRAMEWORKS}
     # Wm3System.cpp (bundle paths): FSRef / ProcessSerialNumber APIs.
     "-framework CoreServices" "-framework ApplicationServices")
   # The build path may contain a space (/Volumes/My Disk/...): target_link_options
@@ -268,7 +268,7 @@ if(_faf_game_sources)
   add_executable(faf_game $<TARGET_OBJECTS:faf_engine> ${_faf_bridge_objects} $<TARGET_OBJECTS:faf_game_main>)
   set_target_properties(faf_game PROPERTIES LINKER_LANGUAGE CXX)
   target_link_libraries(faf_game PRIVATE
-    Wm3Foundation faf_zlib faf_zstd faf_monocypher SDL3::SDL3 ${FAF_MEDIA_LIBRARIES} ${FAF_MACOS_FRAMEWORKS}
+    Wm3Foundation faf_zlib faf_zstd faf_monocypher faf_freetype faf_msdfgen SDL3::SDL3 ${FAF_MEDIA_LIBRARIES} ${FAF_MACOS_FRAMEWORKS}
     "-framework CoreServices" "-framework ApplicationServices")
   target_link_options(faf_game PRIVATE "LINKER:-map,${CMAKE_CURRENT_BINARY_DIR}/faf_game.map")
 endif()

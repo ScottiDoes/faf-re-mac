@@ -51,6 +51,13 @@ target_include_directories(faf_monocypher SYSTEM PUBLIC "${_monocypher_src}")
 target_compile_options(faf_monocypher PRIVATE -w)
 target_link_libraries(faf_monocypher PRIVATE faf_codegen)
 
+# --- FreeType and msdfgen -----------------------------------------------------------------
+# Upstream's own target files; FAF_LINUX only picks clang's warning flags there.
+set(FAF_LINUX ON)
+add_subdirectory("${FAF_ROOT}/cmake/deps/freetype" "${CMAKE_BINARY_DIR}/deps/freetype")
+add_subdirectory("${FAF_ROOT}/cmake/deps/msdfgen" "${CMAKE_BINARY_DIR}/deps/msdfgen")
+unset(FAF_LINUX)
+
 # --- Berkeley SoftFloat 3e (test oracle only) ------------------------------------------
 # Reference for the x87 emulation's exact core (macos/docs/DETERMINISM.md §3.5, §6.1):
 # extF80 with extF80_roundingPrecision 32/64/80 and the "8086" specialization, which

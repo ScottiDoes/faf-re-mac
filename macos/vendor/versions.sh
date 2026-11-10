@@ -45,3 +45,11 @@ ZSTD_SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
 MONOCYPHER_URL=https://github.com/LoupVaillant/Monocypher/archive/refs/tags/4.0.2.tar.gz
 MONOCYPHER_FILE=Monocypher-4.0.2.tar.gz
 MONOCYPHER_SHA256=bc1ca30b1b2654e4e7daf2492c0d204200e55137f23fda6b7142fd7d523bd6b4
+
+# FreeType and msdfgen (sharp MSDF text): the same pins as cmake/FafDependencies.cmake. Source
+# archives, compiled through cmake/deps/freetype and cmake/deps/msdfgen (macos/deps.cmake).
+FREETYPE_URL=https://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.gz
+FREETYPE_SHA256=9186627467a616d9a9e3e574748ac0c45fa77398e6364edef3041a8ba8d92f64
+MSDFGEN_URL=https://github.com/Chlumsky/msdfgen/archive/refs/tags/v1.13.tar.gz
+MSDFGEN_FILE=msdfgen-1.13.tar.gz
+MSDFGEN_SHA256=93cd1ad8918c1a78c5c96e82d4f4c77f0eb86c2e7e8579a0967e54196c4b7167

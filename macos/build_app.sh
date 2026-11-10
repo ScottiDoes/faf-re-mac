@@ -151,6 +151,10 @@ unpack_source() {
 [[ -f dependencies/zstd/lib/zstd.h ]] || unpack_source zstd "$(fetch "$ZSTD_URL" "$ZSTD_SHA256")"
 [[ -f dependencies/monocypher/src/monocypher.c ]] ||
     unpack_source monocypher "$(fetch "$MONOCYPHER_URL" "$MONOCYPHER_SHA256" "$MONOCYPHER_FILE")"
+[[ -f dependencies/freetype/include/ft2build.h ]] || unpack_source freetype "$(fetch "$FREETYPE_URL" "$FREETYPE_SHA256")"
+patch_tree freetype "$root/dependencies/freetype" freetype_2_15_0_faf_oom.patch
+[[ -f dependencies/msdfgen/msdfgen.h ]] ||
+    unpack_source msdfgen "$(fetch "$MSDFGEN_URL" "$MSDFGEN_SHA256" "$MSDFGEN_FILE")"
 
 # ---------------------------------------------------------------------------------------------
 step "SDL3 and FAudio"
