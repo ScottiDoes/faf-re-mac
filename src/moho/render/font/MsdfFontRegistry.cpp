@@ -240,11 +240,6 @@ namespace moho
      */
     [[nodiscard]] std::shared_ptr<const SMsdfFontAtlas> LoadOrCook(const FontFile& file)
     {
-#if defined(FAF_POSIX)
-      // macOS doesn't build the cook yet (platform/posix/stubs/render/moho/MsdfFontCookPosix.cpp):
-      // no atlas, so text stays on the glyph bitmaps.
-      return nullptr;
-#endif
       SMsdfCookOptions options = file.mFromMod ? MSDF_MakeModCookOptions(kCookThreads) : MSDF_MakeCookOptions(kCookThreads);
       options.mCancel = &gCancelCooks;
       const char* const kind = file.mFromMod ? "mod font " : "";
