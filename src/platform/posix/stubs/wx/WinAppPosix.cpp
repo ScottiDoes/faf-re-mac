@@ -394,6 +394,11 @@ void moho::WIN_AppExecute(IWinApp* const app)
       continue;
     }
 
+    // As WinApp.cpp: where the frame's WM_PAINT would come, after the messages and before idle.
+    if (moho::D3D_RunDirectPaint()) {
+      success = true;
+    }
+
     if (success) {
       success = wxTheApp->ProcessIdle();
       continue;
@@ -410,8 +415,8 @@ void moho::WIN_AppExecute(IWinApp* const app)
     WIN_GetBeforeWaitStage().UserFrame();
 
     DWORD timeoutMs = ComputeWaitTimeoutMs();
-    if (FrameChainBroken(timeoutMs)) {
-      timeoutMs = 0; // see FrameChainBroken
+    if (FrameChainBroken(timeoutMs) || moho::D3D_IsDirectPaintPending()) {
+      timeoutMs = 0; // see FrameChainBroken; and a frame that draws without a paint message
     }
     wakeupTimerDur = kInfiniteWakeupMs;
     WIN_GetWaitHandleSet()->MsgWaitEx(timeoutMs);
