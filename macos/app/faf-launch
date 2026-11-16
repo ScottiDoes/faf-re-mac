@@ -32,13 +32,13 @@ fi
 version=$(/usr/libexec/PlistBuddy -c "Print :FAFNativeVersion" "$contents/Info.plist" 2>/dev/null)
 
 bindir=${1:A:h} datadir=${1:A:h:h}
-# The game carries FAF's engine patches up to game version 3840 (faf-re docs/SWITCHES.md). A newer
+# The game carries FAF's engine patches up to game version 3841 (faf-re docs/SWITCHES.md). A newer
 # "faf" version may need new ones: noted in the log, the game runs anyway. (Coop and the other
 # featured mods number their versions differently.)
 gtype=$(sed -n 's/^GameType = "\([^"]*\)".*/\1/p' "$datadir/fa_path.lua" 2>/dev/null)
 gver=$(sed -n 's/^GameVersion = "\([0-9]*\)".*/\1/p' "$datadir/fa_path.lua" 2>/dev/null)
-[[ $gtype == faf && -n $gver ]] && (( gver > 3840 )) &&
-    say "note: game version $gver is newer than the engine patches this build carries (3840)"
+[[ $gtype == faf && -n $gver ]] && (( gver > 3841 )) &&
+    say "note: game version $gver is newer than the engine patches this build carries (3841)"
 
 [[ ${datadir:t} == replaydata ]] && run=$home/replay || run=$home/game
 mkdir -p "$run/bin" || { say "cannot create the run folder $run"; exit 1; }
